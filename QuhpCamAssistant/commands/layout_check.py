@@ -31,6 +31,16 @@ def stop():
     fusion_utils.remove_command(_panel, COMMAND_ID)
 
 
+def _body_label(body):
+    """ボディ名は「ボディ1」ばかりで区別できないため、オカレンス/コンポーネント名を使う。"""
+    try:
+        if body.assemblyContext is not None:
+            return body.assemblyContext.name
+        return body.parentComponent.name
+    except Exception:
+        return body.name
+
+
 def _bbox_gap_mm(box_a, box_b):
     """XY 平面でのバウンディングボックス間距離（mm）。重なりは 0。"""
     dx = max(box_a.minPoint.x - box_b.maxPoint.x, box_b.minPoint.x - box_a.maxPoint.x, 0.0)
@@ -67,28 +77,30 @@ def _on_created(args):
         lines.append(f'{"✓" if fits else "✗"} 全体サイズ: {width:.1f} × {depth:.1f} mm'
                      f'（枠 {width_limit:g} × {depth_limit:g} mm）')
 
-        # 2. 部品間の間隔（bbox 距離による目安）
+        # 2. 部品間の間隔（bbox 距離による目安。実距離の下限なので警告は安全側）
+        tolerance = 0.05  # mm: 8.00mm ちょうどを浮動小数点誤差で警告しないための許容
         narrow_pairs = []
-        overlap_pairs = []
+        overlap_count = 0
         for body_a, body_b in itertools.combinations(bodies, 2):
             gap = _bbox_gap_mm(body_a.boundingBox, body_b.boundingBox)
             if gap == 0.0:
-                overlap_pairs.append((body_a.name, body_b.name))
-            elif gap < gap_limit:
-                narrow_pairs.append((body_a.name, body_b.name, gap))
-        if overlap_pairs:
-            lines.append(f'✗ 重なりの可能性: '
-                         + ', '.join(f'{a}↔{b}' for a, b in overlap_pairs))
+                # 外接矩形の重なり。C/U字形の入れ子配置では正常でも起こるため件数のみ
+                overlap_count += 1
+            elif gap < gap_limit - tolerance:
+                narrow_pairs.append((_body_label(body_a), _body_label(body_b), gap))
         if narrow_pairs:
             lines.append(f'✗ 間隔 {gap_limit:g} mm 未満の可能性（bbox距離による目安）:')
             lines += [f'    {a} ↔ {b}: {gap:.1f} mm' for a, b, gap in narrow_pairs]
-        if not overlap_pairs and not narrow_pairs:
-            lines.append(f'✓ 部品間隔: すべて {gap_limit:g} mm 以上')
+        else:
+            lines.append(f'✓ 部品間隔: {gap_limit:g} mm 未満の組はなし')
+        if overlap_count:
+            lines.append(f'ℹ 外接矩形が重なる組が {overlap_count} 組あります'
+                         '（入れ子配置なら正常。パーツ自体の重なりが無いか目視確認）')
 
         # 3. 高さ揃え
         z_min = min(b.boundingBox.minPoint.z for b in bodies)
         z_max = max(b.boundingBox.maxPoint.z for b in bodies)
-        misaligned = [b.name for b in bodies
+        misaligned = [_body_label(b) for b in bodies
                       if abs(b.boundingBox.minPoint.z - z_min) > 0.005
                       or abs(b.boundingBox.maxPoint.z - z_max) > 0.005]
         if misaligned:
