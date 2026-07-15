@@ -93,6 +93,52 @@ def _is_full_circle_loop(loop):
     return None
 
 
+def _loop_perimeter_cm(loop):
+    return sum(edge.length for edge in loop.edges)
+
+
+def _loop_polygon_area_cm2(loop):
+    """ループを折れ線近似して XY 平面上の面積を求める（cm²）。失敗時 None。"""
+    try:
+        points = []
+        for i in range(loop.coEdges.count):
+            coedge = loop.coEdges.item(i)
+            evaluator = coedge.edge.evaluator
+            ok, t_start, t_end = evaluator.getParameterExtents()
+            ok2, stroke = evaluator.getStrokes(t_start, t_end, 0.01)
+            if not (ok and ok2) or not stroke:
+                return None
+            sequence = list(stroke)
+            if coedge.isOpposedToEdge:
+                sequence.reverse()
+            points.extend(sequence[:-1] if len(sequence) > 1 else sequence)
+        if len(points) < 3:
+            return None
+        area = 0.0
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            area += p1.x * p2.y - p2.x * p1.y
+        return abs(area) / 2.0
+    except Exception:
+        return None
+
+
+def _opening_estimate_mm(loop):
+    """工具が入る開口幅の見積もり（mm）。
+    細長い溝は外接矩形では判定できないため、幅 ≈ 2×面積/周長（細溝で溝幅に一致、
+    コンパクトな穴では実際より小さめ＝安全側）と外接矩形短辺の小さい方を使う。"""
+    bbox_min = _loop_bbox_min_dimension_mm(loop)
+    perimeter = _loop_perimeter_cm(loop)
+    area = _loop_polygon_area_cm2(loop)
+    if area is not None and perimeter and perimeter > 1e-6:
+        hydraulic = 2.0 * area / perimeter * 10.0
+        if bbox_min is not None:
+            return min(bbox_min, hydraulic)
+        return hydraulic
+    return bbox_min
+
+
 def _loop_bbox_min_dimension_mm(loop):
     bbox = None
     for edge in loop.edges:
@@ -204,7 +250,7 @@ def classify(design, registry, config):
                                           _min_feature_radius_mm(loop)))
             else:
                 naikaku_loops.append((list(loop.edges),
-                                      _loop_bbox_min_dimension_mm(loop),
+                                      _opening_estimate_mm(loop),
                                       _min_feature_radius_mm(loop)))
 
         # 中間高さの上向き平面 = ポケット/ざぐりの底
@@ -216,7 +262,7 @@ def classify(design, registry, config):
             if circle is not None:
                 zaguri_faces.append((face, circle.radius * 2.0 * 10.0))
             else:
-                opening = _loop_bbox_min_dimension_mm(outer_loop) if outer_loop else None
+                opening = _opening_estimate_mm(outer_loop) if outer_loop else None
                 pocket_faces.append((face, opening))
 
     items = []
@@ -237,8 +283,15 @@ def classify(design, registry, config):
         items.append(item)
 
     # 内郭（工具径ごとにまとめる）＋ 取り残し提案
+    naikaku_templates = registry.find(tr.KIND_NAIKAKU)
+    min_tool_dia = min((t.tool_diameter_mm for t in naikaku_templates), default=1.5)
     naikaku_by_template = {}
+    too_narrow_count = 0
     for edges, opening_mm, min_feature_mm in naikaku_loops:
+        # 最小工具でも入らない開口は未割り当てにする（設計 or ボール盤対応）
+        if opening_mm is not None and opening_mm < min_tool_dia + tool_margin:
+            too_narrow_count += 1
+            continue
         template = registry.pick(tr.KIND_NAIKAKU, opening_mm,
                                  preferred.get(tr.KIND_NAIKAKU, [3.0, 1.5]), tool_margin)
         if template is None:
@@ -259,6 +312,10 @@ def classify(design, registry, config):
             if min_feature_mm is not None and min_feature_mm < tool_radius - 0.01 \
                     and template.tool_diameter_mm > 1.5:
                 rest_loops.append(edges)
+    if too_narrow_count:
+        result.warnings.append(
+            f'最小工具（Φ{min_tool_dia:g}）でも入らない内郭が {too_narrow_count} 件あります'
+            '（未割り当て。設計を確認してください）。')
     if rest_loops:
         rest_template = registry.pick(tr.KIND_TORINOKOSHI, None, [1.5], tool_margin)
         if rest_template is not None:

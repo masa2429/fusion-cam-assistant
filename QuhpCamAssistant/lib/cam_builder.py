@@ -79,11 +79,27 @@ def build(cam, classify_result, plan_items, config):
     return report
 
 
+SETUP_NAME = 'QUHP 自動セットアップ'
+
+
 def _create_setup(cam, classify_result, config, report):
+    # 再実行で自動セットアップが増殖しないよう、既存の同名セットアップを置き換える
+    removed = 0
+    for i in reversed(range(cam.setups.count)):
+        existing = cam.setups.item(i)
+        try:
+            if existing.name.startswith(SETUP_NAME):
+                existing.deleteMe()
+                removed += 1
+        except Exception:
+            pass
+    if removed:
+        report.notes.append(f'既存の「{SETUP_NAME}」{removed} 件を置き換えました。')
+
     setup_input = cam.setups.createInput(adsk.cam.OperationTypes.MillingOperation)
     setup_input.models = list(classify_result.bodies)
     setup = cam.setups.add(setup_input)
-    setup.name = 'QUHP 自動セットアップ'
+    setup.name = SETUP_NAME
 
     # ストック: 固定ボックス（実機ダンプで確認した手動運用の再現）。
     # X/Y は既定式のまま＝部品範囲を10mm単位に切り上げて中央配置（job_stockFixedX/Y の既定式）。
