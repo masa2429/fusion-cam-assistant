@@ -66,9 +66,19 @@ def _resolve_post_configuration(config, ui):
         if dialog.showOpen() != adsk.core.DialogResults.DialogOK:
             return None
         path = dialog.filename
-    url = adsk.core.URL.create('file:///' + path.replace('\\', '/'))
     post_library = adsk.cam.CAMManager.get().libraryManager.postLibrary
-    return post_library.postConfigurationAtURL(url)
+    # ローカル .cps の URL スキームは環境差があるため候補を順に試す（実機確認対象）
+    for url_text in ('file:///' + path.replace('\\', '/'),
+                     path,
+                     'file://' + path.replace('\\', '/')):
+        try:
+            return post_library.postConfigurationAtURL(adsk.core.URL.create(url_text))
+        except Exception:
+            continue
+    ui.messageBox('ポストプロセッサを読み込めませんでした。\n'
+                  'Fusion のポストライブラリ（ローカル）に originalmind.cps を登録してから、'
+                  '再度お試しください。\n対象: ' + path)
+    return None
 
 
 def _on_created(args):

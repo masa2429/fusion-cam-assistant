@@ -118,3 +118,6 @@ ncProgram.postProcess(postOptions)
 - [ ] `wcs_origin_boxPoint` に入る文字列値の一覧（「左下」に相当する値）
 - [ ] createFromCAMTemplate2 で生成した操作に工具が保持されるか
 - [ ] `selectSameDiameter` パラメータの存在
+- [ ] ローカル .cps を `postConfigurationAtURL` で読み込む際の URL スキーム（file:/// か生パスか）
+- [ ] pocket2d テンプレの高さ設定が「選択面基準」になっているか（固定値だと深さがズレる）
+- [ ] 面の外向き法線（`evaluator.getNormalAtPoint`）が classifier の想定通りか（底面=-Z、ポケット底=+Z）
