@@ -9,7 +9,9 @@ import adsk.core
 
 _handlers = []  # イベントハンドラはGCされないようモジュールで保持する（Fusion APIの定石）
 
-ADDIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# realpath でジャンクションを実体パスに解決する（AddIns からリンクされていても
+# リポジトリ内の templates/ を ../templates で見つけられるようにするため）
+ADDIN_DIR = os.path.dirname(os.path.dirname(os.path.realpath(os.path.abspath(__file__))))
 
 MM_PER_CM = 10.0
 
