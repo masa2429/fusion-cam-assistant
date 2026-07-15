@@ -6,12 +6,15 @@
 #
 # API は NCProgram 系のみ使用（CAM.postProcess は廃止済み・使用禁止。docs/api-notes.md 参照）。
 
+import re
 import traceback
 
 import adsk.cam
 import adsk.core
 
-from ..lib import fusion_utils
+from ..lib import cam_builder, fusion_utils
+
+_NC_NAME_RE = re.compile(r'^\d+_flat')
 
 COMMAND_ID = 'quhpPostAll'
 _panel = None
@@ -104,9 +107,14 @@ def _on_created(args):
             ui.messageBox('セットアップがありません。先に切削データを作成してください。')
             return
 
+        # QUHP 自動セットアップがあればそれだけを対象、無ければ全セットアップを対象にする
+        all_setups = [cam.setups.item(i) for i in range(cam.setups.count)]
+        target_setups = [s for s in all_setups
+                         if s.name.startswith(cam_builder.SETUP_NAME)]
+        if not target_setups:
+            target_setups = all_setups
         operations = []
-        for si in range(cam.setups.count):
-            setup = cam.setups.item(si)
+        for setup in target_setups:
             for oi in range(setup.allOperations.count):
                 operation = setup.allOperations.item(oi)
                 if operation.isSuppressed:
@@ -133,6 +141,17 @@ def _on_created(args):
         if folder_dialog.showDialog() != adsk.core.DialogResults.DialogOK:
             return
         output_folder = folder_dialog.folder
+
+        # 再実行で NC プログラムが増殖しないよう、以前作った n_flat 系を置き換える
+        for i in reversed(range(cam.ncPrograms.count)):
+            nc_program = cam.ncPrograms.item(i)
+            try:
+                label = getattr(nc_program, 'name', None) or \
+                    getattr(nc_program, 'displayName', None) or ''
+                if _NC_NAME_RE.match(label):
+                    nc_program.deleteMe()
+            except Exception:
+                pass
 
         groups = _group_by_tool(operations)
         created_names = []
