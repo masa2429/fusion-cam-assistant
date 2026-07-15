@@ -55,7 +55,8 @@ def _on_created(args):
               '内容を確認し、不要な行はチェックを外してください。外郭は必ず最後に加工されます。')
     if result.warnings:
         header += '\n⚠ ' + '\n⚠ '.join(result.warnings)
-    header_input = inputs.addTextBoxCommandInput('quhpHeader', '', header, 4, True)
+    header_rows = 4 + 2 * len(result.warnings)
+    header_input = inputs.addTextBoxCommandInput('quhpHeader', '', header, header_rows, True)
     header_input.isFullWidth = True
 
     table = inputs.addTableCommandInput('quhpTable', '加工一覧', 3, '1:5:4')

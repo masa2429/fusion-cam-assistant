@@ -126,16 +126,21 @@ def _loop_polygon_area_cm2(loop):
 
 def _opening_estimate_mm(loop):
     """工具が入る開口幅の見積もり（mm）。
-    細長い溝は外接矩形では判定できないため、幅 ≈ 2×面積/周長（細溝で溝幅に一致、
-    コンパクトな穴では実際より小さめ＝安全側）と外接矩形短辺の小さい方を使う。"""
+    曲がった細溝は外接矩形では判定できないため、面積 A と周長 P から
+    「等価長方形の短辺」 w = (P/2 - sqrt((P/2)^2 - 4A)) / 2 を使う
+    （長方形・正方形・直線/曲線スロットで厳密。円形など判別式が負の形状は
+    外接矩形の短辺にフォールバック）。"""
     bbox_min = _loop_bbox_min_dimension_mm(loop)
     perimeter = _loop_perimeter_cm(loop)
     area = _loop_polygon_area_cm2(loop)
     if area is not None and perimeter and perimeter > 1e-6:
-        hydraulic = 2.0 * area / perimeter * 10.0
-        if bbox_min is not None:
-            return min(bbox_min, hydraulic)
-        return hydraulic
+        half_perimeter = perimeter / 2.0
+        discriminant = half_perimeter * half_perimeter - 4.0 * area
+        if discriminant >= 0.0:
+            width = (half_perimeter - math.sqrt(discriminant)) / 2.0 * 10.0
+            if bbox_min is not None:
+                return min(bbox_min, width)
+            return width
     return bbox_min
 
 
@@ -313,9 +318,9 @@ def classify(design, registry, config):
                     and template.tool_diameter_mm > 1.5:
                 rest_loops.append(edges)
     if too_narrow_count:
-        result.warnings.append(
-            f'最小工具（Φ{min_tool_dia:g}）でも入らない内郭が {too_narrow_count} 件あります'
-            '（未割り当て。設計を確認してください）。')
+        items.append(PlanItem(
+            tr.KIND_NAIKAKU, f'内郭（開口幅が狭い） ×{too_narrow_count}', None,
+            note=f'最小工具 Φ{min_tool_dia:g} でも入らない開口。設計を確認してください'))
     if rest_loops:
         rest_template = registry.pick(tr.KIND_TORINOKOSHI, None, [1.5], tool_margin)
         if rest_template is not None:
