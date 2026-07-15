@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "QUHP",
+    "description": {
+        "": "CAM セットアップ・オペレーションの全パラメータをテキストにダンプする（api-notes.md の実機確認用）"
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

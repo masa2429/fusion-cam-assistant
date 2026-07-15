@@ -3,7 +3,7 @@
 # 使用 API は docs/api-notes.md 準拠（createFromCAMTemplate2 / CurveSelections）。
 # ⚠️ 一部のパラメータ名（ストック寸法・WCS原点の boxPoint 等）は実機未確認のため、
 #    候補名リストを順に試し、失敗したものはログに残す方針にしている。
-#    tools/dump_parameters.py の結果で確定したら、この先頭の定数を修正すること。
+#    tools/DumpParameters の結果で確定したら、この先頭の定数を修正すること。
 
 import traceback
 
@@ -104,7 +104,7 @@ def _create_setup(cam, classify_result, config, report):
     if not origin_set:
         report.notes.append(
             '原点をストック左下に設定できませんでした。セットアップ編集で手動設定してください'
-            '（dump_parameters.py の結果で cam_builder.py の候補名を更新すると自動化されます）。')
+            '（DumpParameters の結果で cam_builder.py の候補名を更新すると自動化されます）。')
     return setup
 
 

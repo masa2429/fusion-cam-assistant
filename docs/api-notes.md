@@ -75,7 +75,7 @@ setup.parameters.itemByName('job_stockOffsetTop').expression = '0 mm'
 ```
 
 - WCS 原点: `wcs_origin_mode`（`'point'` / `'modelPoint'` / `'stockPoint'` 等）+ `wcs_origin_point`（SketchPoint/ConstructionPoint）または `wcs_origin_boxPoint`（`'top 1'` のような文字列）
-- ⚠️ 固定ボックスストックの寸法パラメータ名（`job_stockFixedX` 等）と `wcs_origin_boxPoint` の文字列一覧は未確認 → **tools/dump_parameters.py で実機ダンプして確定し、このメモを更新する**
+- ⚠️ 固定ボックスストックの寸法パラメータ名（`job_stockFixedX` 等）と `wcs_origin_boxPoint` の文字列一覧は未確認 → **tools/DumpParameters で実機ダンプして確定し、このメモを更新する**
 - 公式サンプル（WCS）: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/SetViseOriginAsSetupWCSOrigin_Sample.htm
 
 ## 4. ツールパス生成・ポスト処理 ✅
@@ -111,7 +111,7 @@ ncProgram.postProcess(postOptions)
   https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/ManufacturingWorkflowAPISample_Sample.htm
 - CAM パラメータ入門: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/CAMParameters_UM.htm
 
-## 実機確認 TODO（tools/dump_parameters.py で解消する）
+## 実機確認 TODO（tools/DumpParameters で解消する）
 
 - [ ] contour2d 操作のジオメトリパラメータ名（'contours' か）
 - [ ] 固定ボックスストックの寸法パラメータ名
