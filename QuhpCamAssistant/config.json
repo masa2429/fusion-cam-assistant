@@ -1,0 +1,22 @@
+{
+    "template_dir": "E:/Projects/fusion-addin/templates",
+    "post_processor": "",
+    "stock": {
+        "width_mm": 280,
+        "depth_mm": 280
+    },
+    "part_gap_mm": 8.0,
+    "hole_rules": [
+        { "hole_diameter_mm": 2.0, "template": "[Φ1.5]Φ2.0 穴あけ" },
+        { "hole_diameter_mm": 2.6, "template": "[Φ2.0]Φ2.6 穴あけ" }
+    ],
+    "diameter_tolerance_mm": 0.05,
+    "tool_margin_mm": 0.5,
+    "preferred_tools": {
+        "外郭": [3.0, 2.0],
+        "内郭": [3.0, 1.5],
+        "内郭ポケット": [5.0, 3.0, 1.5],
+        "ざぐり": [3.0, 2.0, 1.5],
+        "取り残し加工": [1.5, 3.0]
+    }
+}

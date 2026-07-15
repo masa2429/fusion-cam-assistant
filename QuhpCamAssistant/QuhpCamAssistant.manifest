@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "addin",
+    "id": "6f9a2f3e-3f7c-4d0a-9e6b-quhpcam000001",
+    "author": "QUHP",
+    "description": {
+        "": "QUHP CAM Assistant: 切削データ作成の自動化（セットアップ生成・輪郭/穴の自動選択とテンプレート適用・NC出力・配置チェック）"
+    },
+    "version": "0.1.0",
+    "runOnStartup": true,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
