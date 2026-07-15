@@ -13,15 +13,16 @@ import adsk.core
 from . import fusion_utils
 from . import template_registry as tr
 
-# --- 実機確認対象のパラメータ名（api-notes.md「実機確認 TODO」） ---------------
-# contour2d 系操作のジオメトリパラメータ名の候補（先頭から順に試す）
+# --- パラメータ名（2026-07-15 実機ダンプ arm1.5mm_1 v5 / Fusion 2703.1.20 で確定） ---
+# contour2d のジオメトリパラメータは 'contours' で確定。
+# 同型の 'stockContours' が別に存在するため、型スキャンより名前一致を優先すること。
 CONTOUR_PARAM_CANDIDATES = ['contours']
-# pocket2d 系操作のジオメトリパラメータ名の候補
+# pocket2d 系操作のジオメトリパラメータ名の候補（⚠️ pocket 操作は未ダンプ・実機未確認）
 POCKET_PARAM_CANDIDATES = ['pockets']
-# WCS 原点をストックボックスの点にするモード値と点名の候補
-WCS_ORIGIN_MODE_CANDIDATES = ["'stockBoxPoint'", "'stockPoint'"]
-WCS_BOX_POINT_CANDIDATES = ["'bottom lower left'", "'lower left'", "'bottom 1'"]
-# -----------------------------------------------------------------------------
+# WCS 原点: 手動セットアップの実測値（ストック点モード＋上面の角 'top 1'）
+WCS_ORIGIN_MODE_CANDIDATES = ["'stockPoint'"]
+WCS_BOX_POINT_CANDIDATES = ["'top 1'"]
+# -------------------------------------------------------------------------------
 
 
 class BuildReport:
@@ -80,16 +81,17 @@ def _create_setup(cam, classify_result, config, report):
     setup = cam.setups.add(setup_input)
     setup.name = 'QUHP 自動セットアップ'
 
-    # ストック: モデル相対・オフセット0（=パーツ群の外接箱、高さ=板厚）を既定にする。
-    # 固定 280×280 ボックスのパラメータ名は実機未確認のため v1 では相対を採用
-    # （切り上げ0・板厚一致という手順書の要件は相対＋オフセット0で満たされる）。
+    # ストック: 固定ボックス（実機ダンプで確認した手動運用の再現）。
+    # X/Y は既定式のまま＝部品範囲を10mm単位に切り上げて中央配置（job_stockFixedX/Y の既定式）。
+    # Z のみ板厚ちょうどに固定する（既定式だと10mmに切り上がってしまうため）。
     try:
-        setup.stockMode = adsk.cam.SetupStockModes.RelativeBoxStock
-        _try_set(setup.parameters, 'job_stockOffsetMode', "'simple'", report)
-        _try_set(setup.parameters, 'job_stockOffsetSides', '0 mm', report)
-        _try_set(setup.parameters, 'job_stockOffsetTop', '0 mm', report)
+        setup.stockMode = adsk.cam.SetupStockModes.FixedBoxStock
     except Exception:
-        report.notes.append('ストック設定に失敗。手動で確認してください。')
+        pass
+    _try_set(setup.parameters, 'job_stockMode', "'fixedbox'", report)
+    if classify_result.thickness_mm > 0:
+        _try_set(setup.parameters, 'job_stockFixedZ',
+                 f'{classify_result.thickness_mm:g} mm', report)
 
     # WCS 原点: ストックボックス左下（候補名を順に試す）
     origin_set = False
@@ -129,8 +131,11 @@ def _find_contours_param(operation, preferred_names):
         if parameter and adsk.cam.CadContours2dParameterValue.cast(parameter.value):
             return parameter
     # 名前候補で見つからなければ型でスキャン（見つけた名前はログに残す）
+    # 'stockContours' は同型の別パラメータ（ストック輪郭）なので除外する
     for i in range(operation.parameters.count):
         parameter = operation.parameters.item(i)
+        if parameter.name == 'stockContours':
+            continue
         try:
             if adsk.cam.CadContours2dParameterValue.cast(parameter.value):
                 fusion_utils.log(

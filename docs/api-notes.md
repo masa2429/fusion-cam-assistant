@@ -111,13 +111,22 @@ ncProgram.postProcess(postOptions)
   https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/ManufacturingWorkflowAPISample_Sample.htm
 - CAM パラメータ入門: https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/CAMParameters_UM.htm
 
-## 実機確認 TODO（tools/DumpParameters で解消する）
+## 実機確認の結果（2026-07-15、arm1.5mm_1 v5 / Fusion 2703.1.20 のダンプより）
 
-- [ ] contour2d 操作のジオメトリパラメータ名（'contours' か）
-- [ ] 固定ボックスストックの寸法パラメータ名
-- [ ] `wcs_origin_boxPoint` に入る文字列値の一覧（「左下」に相当する値）
-- [ ] createFromCAMTemplate2 で生成した操作に工具が保持されるか
-- [ ] `selectSameDiameter` パラメータの存在
+- [x] **contour2d のジオメトリパラメータ名 = `contours`** ✅（`CadContours2dParameterValue`）。
+      同型の `stockContours` が別に存在するので型スキャンで拾わないこと
+- [x] **固定ボックスストック**: `job_stockMode = "'fixedbox'"`。寸法は `job_stockFixedX/Y/Z`
+      （X/Y の既定式 `Math.ceilto(surfaceXHigh - surfaceXLow; job_stockFixedRoundingValue)` が
+      「部品範囲を10mm単位で切り上げ・中央配置」を自動でやる。Z のみ板厚に明示設定する。
+      丸め幅は `job_stockFixedRoundingValue` = 10mm）
+- [x] **WCS 原点**: `wcs_origin_mode = "'stockPoint'"` ＋ `wcs_origin_boxPoint = "'top 1'"`
+      （手動セットアップの実測値。ストック上面の角）
+- [x] `selectSameDiameter`: contour2d 操作には存在しない（drill 戦略用。v1 では不要と確定）
+
+## 実機確認 TODO（残り）
+
+- [ ] createFromCAMTemplate2 で生成した操作に工具が保持されるか（初回の自動生成で確認）
+- [ ] pocket2d のジオメトリパラメータ名（'pockets' 想定。ポケット操作入りのデータをダンプして確定）
 - [ ] ローカル .cps を `postConfigurationAtURL` で読み込む際の URL スキーム（file:/// か生パスか）
 - [ ] pocket2d テンプレの高さ設定が「選択面基準」になっているか（固定値だと深さがズレる）
 - [ ] 面の外向き法線（`evaluator.getNormalAtPoint`）が classifier の想定通りか（底面=-Z、ポケット底=+Z）

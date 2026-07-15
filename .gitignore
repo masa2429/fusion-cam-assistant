@@ -6,4 +6,5 @@ Thumbs.db
 Desktop.ini
 # パラメータダンプ等の一時出力
 tools/output/
+dump*.txt
 *.nc
