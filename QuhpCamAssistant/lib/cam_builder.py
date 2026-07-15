@@ -5,6 +5,10 @@
 #    候補名リストを順に試し、失敗したものはログに残す方針にしている。
 #    tools/DumpParameters の結果で確定したら、この先頭の定数を修正すること。
 
+import hashlib
+import os
+import shutil
+import tempfile
 import traceback
 
 import adsk.cam
@@ -110,8 +114,21 @@ def _create_setup(cam, classify_result, config, report):
     return setup
 
 
+def _load_cam_template(template):
+    """CAMTemplate を読み込む。
+    createFromFile は内部で ANSI 変換するため日本語・Φ入りパスで失敗する
+    （実機確認済み: 'No mapping for the Unicode character...'）。
+    ASCII 名の一時ファイルへコピーしてから読み込む。"""
+    digest = hashlib.md5(template.path.encode('utf-8')).hexdigest()[:12]
+    temp_path = os.path.join(tempfile.gettempdir(),
+                             f'quhpcam_{digest}.f3dhsm-template')
+    if not os.path.isfile(temp_path):
+        shutil.copyfile(template.path, temp_path)
+    return adsk.cam.CAMTemplate.createFromFile(temp_path)
+
+
 def _create_operation_from_template(setup, template):
-    cam_template = adsk.cam.CAMTemplate.createFromFile(template.path)
+    cam_template = _load_cam_template(template)
     template_input = adsk.cam.CreateFromCAMTemplateInput.create()
     template_input.camTemplate = cam_template
     results = setup.createFromCAMTemplate2(template_input)

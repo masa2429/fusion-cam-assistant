@@ -21,6 +21,7 @@ templateInput.camTemplate = camTemplate
 results = setup.createFromCAMTemplate2(templateInput)  # OperationBase[] を返す
 ```
 
+- ❗ **`createFromFile` は非 ASCII パス（日本語・Φ）で失敗する**（実機確認済み 2026-07-15。内部で ANSI 変換するため）。ASCII 名の一時ファイルへコピーしてから読み込むこと（cam_builder.py `_load_cam_template` 参照）
 - `CreateFromCAMTemplateInput.mode` のデフォルトは **Skip Generation**（ツールパスは生成されない）→ 明示的に `generateToolpath`/`generateAllToolpaths` を呼ぶ
 - **テンプレートはジオメトリ選択を持ち越さない**（公式サポート記事で明記）→ 生成後に contours/pockets/holeFaces を API で割り当てるのが必須。これがこのアドインの存在理由
 - ⚠️ テンプレ内の工具が生成された操作に保持されるかは実機で要確認（保持されない場合は工具ライブラリ経由で割当）
