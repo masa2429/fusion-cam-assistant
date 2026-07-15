@@ -180,6 +180,50 @@ def _find_contours_param(operation, preferred_names):
     return None
 
 
+def _edge_points(edge):
+    evaluator = edge.evaluator
+    ok, t_start, t_end = evaluator.getParameterExtents()
+    ok2, points = evaluator.getStrokes(t_start, t_end, 0.01)
+    if not (ok and ok2) or len(points) < 2:
+        return None
+    return list(points)
+
+
+def _signed_area_from_first_edge(loop_edges):
+    """先頭エッジの自然方向から始めてループを連結順にたどり、
+    +Z から見た符号付き面積を返す（正=反時計回り）。失敗時 None。"""
+    points = _edge_points(loop_edges[0])
+    if points is None:
+        return None
+    points = list(points)
+    remaining = list(loop_edges[1:])
+    tolerance = 1e-3  # cm
+    while remaining:
+        found = False
+        for i, edge in enumerate(remaining):
+            edge_pts = _edge_points(edge)
+            if edge_pts is None:
+                return None
+            if points[-1].distanceTo(edge_pts[0]) < tolerance:
+                points.extend(edge_pts[1:])
+            elif points[-1].distanceTo(edge_pts[-1]) < tolerance:
+                points.extend(list(reversed(edge_pts))[1:])
+            else:
+                continue
+            remaining.pop(i)
+            found = True
+            break
+        if not found:
+            return None
+    area = 0.0
+    count = len(points)
+    for i in range(count):
+        p1 = points[i]
+        p2 = points[(i + 1) % count]
+        area += p1.x * p2.y - p2.x * p1.y
+    return area / 2.0
+
+
 def _assign_geometry(operation, item):
     if item.faces:
         parameter = _find_contours_param(operation, POCKET_PARAM_CANDIDATES)
@@ -198,9 +242,27 @@ def _assign_geometry(operation, item):
         contours_value = adsk.cam.CadContours2dParameterValue.cast(parameter.value)
         selections = contours_value.getCurveSelections()
         selections.clear()
+        # 加工サイドはチェーンの周回方向で決まる（テンプレは左補正）。
+        # エッジ列から作るチェーンの向きはボディ依存で不定のため、符号付き面積で
+        # 現在の向きを求め、外郭=時計回り（外側）・内郭/穴=反時計回り（内側）に揃える。
+        desired_ccw = (item.kind != tr.KIND_GAIKAKU)
+        reverted_count = 0
         for loop_edges in item.loops:
             chain = selections.createNewChainSelection()
             chain.inputGeometry = list(loop_edges)
+            area = _signed_area_from_first_edge(loop_edges)
+            if area is not None:
+                current_ccw = area > 0
+                if current_ccw != desired_ccw:
+                    try:
+                        chain.isReverted = True
+                        reverted_count += 1
+                    except Exception:
+                        fusion_utils.log('ChainSelection.isReverted を設定できませんでした')
+            else:
+                fusion_utils.log(f'{item.label}: ループ方向を判定できないチェーンがあります')
+        if reverted_count:
+            fusion_utils.log(f'{item.label}: {reverted_count} 本のチェーンの向きを反転')
         contours_value.applyCurveSelections(selections)
 
 
