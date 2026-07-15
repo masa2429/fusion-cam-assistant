@@ -42,6 +42,12 @@ contoursValue.applyCurveSelections(chains)
 
 `CurveSelections` のメソッド（全て2023/4導入）: `createNewChainSelection`, `createNewSilhouetteSelection`, `createNewPocketSelection`, `createNewPocketRecognitionSelection`, `createNewFaceContourSelection`, `createNewSketchSelection`, `clear`, `item`, `remove`
 
+❗ **チェーンの周回方向＝加工サイド**（実機確認済み 2026-07-15）:
+エッジ列から作った ChainSelection の周回方向は不定（ボディの押し出し方向・ミラー等に依存）。
+テンプレは左補正なので、+Z 視点で **内郭/穴=反時計回り・外郭=時計回り** になるよう
+符号付き面積で向きを判定し `chain.isReverted = True` で反転させる（cam_builder.py `_signed_area_from_first_edge`）。
+`isReverted` は「先頭エッジの自然方向から始まる連結順トラバース」を基準に反転する挙動で、この方式で16パーツ全て正しいサイドになった。
+
 ### ポケット（pocket2d）✅
 
 ```python
