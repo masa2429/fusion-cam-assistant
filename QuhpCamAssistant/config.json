@@ -1,6 +1,6 @@
 {
     "template_dir": "E:/Projects/fusion-addin/templates",
-    "post_processor": "",
+    "post_name_hint": "originalmind",
     "stock": {
         "width_mm": 280,
         "depth_mm": 280

@@ -6,7 +6,6 @@
 #
 # API は NCProgram 系のみ使用（CAM.postProcess は廃止済み・使用禁止。docs/api-notes.md 参照）。
 
-import os
 import traceback
 
 import adsk.cam
@@ -56,28 +55,44 @@ def _group_by_tool(operations):
     return groups
 
 
-def _resolve_post_configuration(config, ui):
-    """config.json の post_processor（.cps）をポストライブラリから解決する。"""
-    path = config.get('post_processor', '')
-    if not path or not os.path.isfile(path):
-        dialog = ui.createFileDialog()
-        dialog.title = 'ポストプロセッサ（originalmind.cps）を選択'
-        dialog.filter = 'ポストプロセッサ (*.cps)'
-        if dialog.showOpen() != adsk.core.DialogResults.DialogOK:
-            return None
-        path = dialog.filename
-    post_library = adsk.cam.CAMManager.get().libraryManager.postLibrary
-    # ローカル .cps の URL スキームは環境差があるため候補を順に試す（実機確認対象）
-    for url_text in ('file:///' + path.replace('\\', '/'),
-                     path,
-                     'file://' + path.replace('\\', '/')):
+def _post_text(post):
+    """PostConfiguration の識別に使えるテキストを寄せ集める（属性は環境差に備え防御的に）。"""
+    text = []
+    for attr in ('description', 'vendor', 'name'):
         try:
-            return post_library.postConfigurationAtURL(adsk.core.URL.create(url_text))
+            value = getattr(post, attr, None)
+            if value:
+                text.append(str(value))
         except Exception:
-            continue
-    ui.messageBox('ポストプロセッサを読み込めませんでした。\n'
-                  'Fusion のポストライブラリ（ローカル）に originalmind.cps を登録してから、'
-                  '再度お試しください。\n対象: ' + path)
+            pass
+    return ' '.join(text).lower()
+
+
+def _resolve_post_configuration(config, ui):
+    """ポストライブラリ（ローカル）から名前ヒントで検索して解決する。
+    ファイルパス直接読み（postConfigurationAtURL + file URL）は実機で失敗したため
+    ライブラリ検索を第一手段にする（2026-07-15 実機確認）。"""
+    hint = str(config.get('post_name_hint', 'originalmind')).lower()
+    post_library = adsk.cam.CAMManager.get().libraryManager.postLibrary
+    found = []
+    all_posts = []
+    try:
+        query = post_library.createQuery(adsk.cam.LibraryLocations.LocalLibraryLocation)
+        for post in query.execute():
+            text = _post_text(post)
+            all_posts.append(text)
+            if hint in text:
+                found.append(post)
+    except Exception:
+        fusion_utils.log('ポストライブラリの検索に失敗:\n' + traceback.format_exc())
+    if found:
+        if len(found) > 1:
+            fusion_utils.log(f'ヒント {hint!r} に複数のポストが一致。先頭を使用します。')
+        return found[0]
+    ui.messageBox(
+        f'ポストライブラリ（ローカル）に「{hint}」に一致するポストが見つかりませんでした。\n'
+        'config.json の post_name_hint を確認してください。\n\n'
+        '見つかったポスト:\n  ' + ('\n  '.join(all_posts) if all_posts else '(なし)'))
     return None
 
 
@@ -101,10 +116,11 @@ def _on_created(args):
             ui.messageBox('操作がありません。')
             return
 
-        without_toolpath = [op.name for op in operations if not op.hasToolpath]
-        if without_toolpath:
-            ui.messageBox('ツールパス未生成の操作があります。先に生成してください:\n  '
-                          + '\n  '.join(without_toolpath))
+        # ツールパスの無い操作（未生成・空の取り残し等）は自動でスキップして続行する
+        skipped_names = [op.name for op in operations if not op.hasToolpath]
+        operations = [op for op in operations if op.hasToolpath]
+        if not operations:
+            ui.messageBox('有効なツールパスを持つ操作がありません。先に生成してください。')
             return
 
         config = fusion_utils.load_config()
@@ -120,24 +136,34 @@ def _on_created(args):
 
         groups = _group_by_tool(operations)
         created_names = []
+        failed_names = []
         for index, (diameter, group_operations) in enumerate(groups, start=1):
             dia_text = f'{diameter:g}' if diameter is not None else 'unknown'
             name = f'{index}_flat{dia_text}'
-            nc_input = cam.ncPrograms.createInput()
-            nc_input.displayName = name
-            nc_input.operations = group_operations
-            _set_nc_parameter(nc_input, 'nc_program_filename', name)
-            _set_nc_parameter(nc_input, 'nc_program_output_folder', output_folder)
-            _set_nc_parameter(nc_input, 'nc_program_openInEditor', False)
-            nc_program = cam.ncPrograms.add(nc_input)
-            nc_program.postConfiguration = post_configuration
-            options = adsk.cam.NCProgramPostProcessOptions.create()
-            nc_program.postProcess(options)
-            created_names.append(f'{name}（{len(group_operations)} 操作）')
+            try:
+                nc_input = cam.ncPrograms.createInput()
+                nc_input.displayName = name
+                nc_input.operations = group_operations
+                _set_nc_parameter(nc_input, 'nc_program_filename', name)
+                _set_nc_parameter(nc_input, 'nc_program_output_folder', output_folder)
+                _set_nc_parameter(nc_input, 'nc_program_openInEditor', False)
+                nc_program = cam.ncPrograms.add(nc_input)
+                nc_program.postConfiguration = post_configuration
+                options = adsk.cam.NCProgramPostProcessOptions.create()
+                nc_program.postProcess(options)
+                created_names.append(f'{name}（{len(group_operations)} 操作）')
+            except Exception:
+                failed_names.append(name)
+                fusion_utils.log(f'NCポスト失敗 {name}:\n{traceback.format_exc()}')
 
-        ui.messageBox('ポスト完了:\n  ' + '\n  '.join(created_names)
-                      + f'\n\n出力先: {output_folder}'
-                      + '\n\nファイル名の番号順（= 切削順）に実行してください。')
+        message = 'ポスト完了:\n  ' + '\n  '.join(created_names) \
+                  + f'\n\n出力先: {output_folder}' \
+                  + '\n\nファイル名の番号順（= 切削順）に実行してください。'
+        if skipped_names:
+            message += '\n\nツールパスが無いためスキップした操作:\n  ' + '\n  '.join(skipped_names)
+        if failed_names:
+            message += '\n\n⚠ ポストに失敗（ログ参照）:\n  ' + '\n  '.join(failed_names)
+        ui.messageBox(message)
     except Exception:
         ui.messageBox('NC出力に失敗:\n{}'.format(traceback.format_exc()))
 
