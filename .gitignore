@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+Thumbs.db
+Desktop.ini
+# パラメータダンプ等の一時出力
+tools/output/
+*.nc
