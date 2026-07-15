@@ -1,10 +1,18 @@
 # メインコマンド：ボディ解析 → 確認ダイアログ → セットアップ＋操作の一括生成
-# （Step 2-3 で実装）
+#
+# ダイアログは分類結果を1行=1操作で一覧表示し、チェックボックスで適用の有無、
+# ドロップダウンで同種別の別テンプレート（工具径違い）への変更ができる。
 
-from ..lib import fusion_utils
+import traceback
+
+import adsk.cam
+import adsk.core
+
+from ..lib import cam_builder, classifier, fusion_utils, template_registry
 
 COMMAND_ID = 'quhpAutoCam'
 _panel = None
+_state = {}  # {'result': ClassifyResult, 'registry': Registry, 'config': dict}
 
 
 def start(panel):
@@ -18,7 +26,83 @@ def start(panel):
 
 def stop():
     fusion_utils.remove_command(_panel, COMMAND_ID)
+    _state.clear()
 
 
 def _on_created(args):
-    fusion_utils.ui().messageBox('未実装（Step 2-3 で実装予定）')
+    ui = fusion_utils.ui()
+    command = args.command
+
+    design = fusion_utils.active_design()
+    cam = fusion_utils.active_cam()
+    if not design or not cam:
+        ui.messageBox('デザインと製造（CAM）データのあるドキュメントで実行してください。')
+        return
+
+    config = fusion_utils.load_config()
+    registry = template_registry.Registry(config['template_dir'])
+    result = classifier.classify(design, registry, config)
+    if not result.items:
+        ui.messageBox('加工候補が見つかりませんでした。\n' + '\n'.join(result.warnings))
+        return
+
+    _state['result'] = result
+    _state['registry'] = registry
+    _state['config'] = config
+
+    inputs = command.commandInputs
+    header = (f'対象ボディ: {len(result.bodies)} 個　板厚: {result.thickness_mm:.1f} mm\n'
+              '内容を確認し、不要な行はチェックを外してください。外郭は必ず最後に加工されます。')
+    if result.warnings:
+        header += '\n⚠ ' + '\n⚠ '.join(result.warnings)
+    header_input = inputs.addTextBoxCommandInput('quhpHeader', '', header, 4, True)
+    header_input.isFullWidth = True
+
+    table = inputs.addTableCommandInput('quhpTable', '加工一覧', 3, '1:5:4')
+    table.isFullWidth = True
+    table.maximumVisibleRows = 12
+    for index, item in enumerate(result.items):
+        checkbox = inputs.addBoolValueInput(f'quhpChk{index}', '適用', True, '', item.enabled)
+        checkbox.isEnabled = item.template is not None
+        label_text = item.label + (f'\n{item.note}' if item.note else '')
+        label = inputs.addTextBoxCommandInput(f'quhpLbl{index}', '', label_text,
+                                              2 if item.note else 1, True)
+        row = table.rowCount
+        table.addCommandInput(checkbox, row, 0)
+        table.addCommandInput(label, row, 1)
+        if item.template is not None:
+            dropdown = inputs.addDropDownCommandInput(
+                f'quhpTpl{index}', 'テンプレート',
+                adsk.core.DropDownStyles.TextListDropDownStyle)
+            for template in _state['registry'].find(item.kind):
+                dropdown.listItems.add(template.name, template.name == item.template.name)
+            table.addCommandInput(dropdown, row, 2)
+
+    on_execute = _ExecuteHandler()
+    command.execute.add(fusion_utils.keep(on_execute))
+    command.okButtonText = '生成'
+
+
+class _ExecuteHandler(adsk.core.CommandEventHandler):
+    def notify(self, args):
+        ui = fusion_utils.ui()
+        try:
+            inputs = args.command.commandInputs
+            result = _state['result']
+            registry = _state['registry']
+
+            for index, item in enumerate(result.items):
+                checkbox = inputs.itemById(f'quhpChk{index}')
+                if checkbox is not None:
+                    item.enabled = checkbox.value and checkbox.isEnabled
+                dropdown = inputs.itemById(f'quhpTpl{index}')
+                if dropdown is not None and dropdown.selectedItem is not None:
+                    selected = registry.by_name(dropdown.selectedItem.name)
+                    if selected is not None:
+                        item.template = selected
+
+            cam = fusion_utils.active_cam()
+            report = cam_builder.build(cam, result, result.items, _state['config'])
+            ui.messageBox(report.summary(), 'QUHP CAM Assistant')
+        except Exception:
+            ui.messageBox('生成に失敗:\n{}'.format(traceback.format_exc()))
