@@ -58,6 +58,18 @@ chain.inputGeometry = pocketBottomFaces   # 底面 BRepFace のリスト
 pocketSelection.applyCurveSelections(chains)
 ```
 
+### ボア（bore・ヘリカル穴あけ）✅（実機確認済み 2026-07-16）
+
+```python
+parameter = op.parameters.itemByName('circularFaces')  # CadObjectParameterValue
+parameter.value.value = faces  # 穴/ざぐりの円筒側面 list[BRepFace]
+```
+
+- DLC テンプレ（Inventor 由来）のボアで使用。円形エッジの隣接円筒面を渡す
+- ❗ **要更新（無効）状態のツールパスは NCProgram.postProcess が失敗する**。
+  `isToolpathValid` での検出はバージョン差で当てにならないため、
+  **NC 出力前に無条件で `generateAllToolpaths(True)` を通す**（有効なものはスキップされ高速）
+
 ### ドリル穴 ✅（このプロジェクトの標準テンプレには drill 戦略なし、将来用）
 
 ```python
