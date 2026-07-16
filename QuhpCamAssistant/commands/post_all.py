@@ -6,6 +6,8 @@
 #
 # API は NCProgram 系のみ使用（CAM.postProcess は廃止済み・使用禁止。docs/api-notes.md 参照）。
 
+import datetime
+import os
 import re
 import traceback
 
@@ -31,6 +33,63 @@ def start(panel):
 
 def stop():
     fusion_utils.remove_command(_panel, COMMAND_ID)
+
+
+def _machining_time_text(cam, operations):
+    """加工時間の目安（分）。API 差異に備えて取得できなければ None。"""
+    try:
+        total_seconds = 0.0
+        for operation in operations:
+            result = cam.machiningTime(operation)
+            total_seconds += result.machiningTime
+        return f'{total_seconds / 60:.0f} 分'
+    except Exception:
+        return None
+
+
+def _stock_text(setup):
+    try:
+        x = setup.parameters.itemByName('job_stockInfoDimensionX').value.value * 10
+        y = setup.parameters.itemByName('job_stockInfoDimensionY').value.value * 10
+        z = setup.parameters.itemByName('job_stockInfoDimensionZ').value.value * 10
+        return f'{x:.1f} × {y:.1f} × {z:.1f} mm'
+    except Exception:
+        return '（Fusion で確認）'
+
+
+def _write_instructions(cam, output_folder, document_name, target_setups, group_details):
+    """加工指示書.txt を出力フォルダに書き出す。失敗しても NC 出力は成功扱い。"""
+    lines = [
+        '=' * 46,
+        'QUHP CAM 加工指示書',
+        '=' * 46,
+        f'作成日時    : {datetime.datetime.now():%Y-%m-%d %H:%M}',
+        f'ドキュメント: {document_name}',
+        f'セットアップ: {"、".join(s.name for s in target_setups)}',
+        f'ストック    : {_stock_text(target_setups[0])}',
+        '原点        : ストック上面の角（機械側のゼロ合わせと一致していること）',
+        '',
+        '★ 加工前に必ずシミュレーションで全データを確認する（高さ・ピッチ・衝突）',
+        '★ ファイル名の番号順に実行する。番号が変わるところで工具を交換する',
+        '',
+    ]
+    total_time_known = True
+    for index, (name, diameter, operations, time_text) in enumerate(group_details, start=1):
+        lines.append(f'[{index}] {name}')
+        dia_text = f'Φ{diameter:g}' if diameter is not None else '不明'
+        lines.append(f'    工具    : フラットエンドミル {dia_text}')
+        lines.append(f'    操作    : {", ".join(op.name for op in operations)}')
+        if time_text:
+            lines.append(f'    加工時間: 約 {time_text}（目安。実際はこれより長くなる傾向）')
+        else:
+            total_time_known = False
+        lines.append('')
+    if not total_time_known:
+        lines.append('※ 加工時間は Fusion のシミュレーション「統計」で確認してください')
+    path = os.path.join(output_folder, '加工指示書.txt')
+    with open(path, 'w', encoding='utf-8-sig') as f:
+        f.write('\n'.join(lines))
+    return path
 
 
 def _tool_diameter_mm(operation):
@@ -156,6 +215,7 @@ def _on_created(args):
         groups = _group_by_tool(operations)
         created_names = []
         failed_names = []
+        group_details = []
         for index, (diameter, group_operations) in enumerate(groups, start=1):
             dia_text = f'{diameter:g}' if diameter is not None else 'unknown'
             name = f'{index}_flat{dia_text}'
@@ -171,12 +231,24 @@ def _on_created(args):
                 options = adsk.cam.NCProgramPostProcessOptions.create()
                 nc_program.postProcess(options)
                 created_names.append(f'{name}（{len(group_operations)} 操作）')
+                group_details.append((name, diameter, group_operations,
+                                      _machining_time_text(cam, group_operations)))
             except Exception:
                 failed_names.append(name)
                 fusion_utils.log(f'NCポスト失敗 {name}:\n{traceback.format_exc()}')
 
+        instructions_note = ''
+        if group_details:
+            try:
+                document_name = fusion_utils.app().activeDocument.name
+                path = _write_instructions(cam, output_folder, document_name,
+                                           target_setups, group_details)
+                instructions_note = f'\n加工指示書: {path}'
+            except Exception:
+                fusion_utils.log('加工指示書の出力に失敗:\n' + traceback.format_exc())
+
         message = 'ポスト完了:\n  ' + '\n  '.join(created_names) \
-                  + f'\n\n出力先: {output_folder}' \
+                  + f'\n\n出力先: {output_folder}{instructions_note}' \
                   + '\n\nファイル名の番号順（= 切削順）に実行してください。'
         if skipped_names:
             message += '\n\nツールパスが無いためスキップした操作:\n  ' + '\n  '.join(skipped_names)
