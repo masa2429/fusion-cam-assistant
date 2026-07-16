@@ -6,6 +6,8 @@
         "depth_mm": 280
     },
     "part_gap_mm": 8.0,
+    "placement_edge_margin_mm": 8.0,
+    "arrange_solver": "auto",
     "stock_side_margin_mm": 5.0,
     "force_safe_linking": true,
     "hole_rules": [

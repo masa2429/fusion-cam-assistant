@@ -31,6 +31,21 @@ def stop():
     fusion_utils.remove_command(_panel, COMMAND_ID)
 
 
+def has_frame_sketch(root):
+    return any(sketch.name == FRAME_SKETCH_NAME for sketch in root.sketches)
+
+
+def create_frame_sketch(root, width_mm, depth_mm):
+    """配置ガイドの枠スケッチ（原点基準・第一象限）を作る。auto_place からも使う。"""
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    sketch.name = FRAME_SKETCH_NAME
+    corner_1 = adsk.core.Point3D.create(0, 0, 0)
+    corner_2 = adsk.core.Point3D.create(
+        fusion_utils.mm_to_cm(width_mm), fusion_utils.mm_to_cm(depth_mm), 0)
+    sketch.sketchCurves.sketchLines.addTwoPointRectangle(corner_1, corner_2)
+    return sketch
+
+
 def _body_label(body):
     """ボディ名は「ボディ1」ばかりで区別できないため、オカレンス/コンポーネント名を使う。"""
     try:
@@ -112,19 +127,13 @@ def _on_created(args):
 
         # 4. 配置枠スケッチ（無ければ作成を提案）
         root = design.rootComponent
-        has_frame = any(sketch.name == FRAME_SKETCH_NAME for sketch in root.sketches)
-        if not has_frame:
+        if not has_frame_sketch(root):
             answer = ui.messageBox(
                 '\n'.join(lines) + '\n\n配置ガイドの枠スケッチ（280×280、原点基準）を作成しますか？',
                 '配置チェック',
                 adsk.core.MessageBoxButtonTypes.YesNoButtonType)
             if answer == adsk.core.DialogResults.DialogYes:
-                sketch = root.sketches.add(root.xYConstructionPlane)
-                sketch.name = FRAME_SKETCH_NAME
-                corner_1 = adsk.core.Point3D.create(0, 0, 0)
-                corner_2 = adsk.core.Point3D.create(
-                    fusion_utils.mm_to_cm(width_limit), fusion_utils.mm_to_cm(depth_limit), 0)
-                sketch.sketchCurves.sketchLines.addTwoPointRectangle(corner_1, corner_2)
+                create_frame_sketch(root, width_limit, depth_limit)
         else:
             ui.messageBox('\n'.join(lines), '配置チェック')
     except Exception:
