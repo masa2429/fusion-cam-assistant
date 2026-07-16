@@ -322,6 +322,7 @@ def _assign_bore_faces(operation, item):
         fusion_utils.log(f'ボアの図形パラメータ候補（実機ダンプ）: {found}')
         raise RuntimeError('ボアの図形選択パラメータが見つかりません'
                            '（テキストコマンドの候補名を cam_builder.py に追加してください）')
+    fusion_utils.log(f'ボアの図形パラメータ: {parameter.name!r} を使用')
     parameter.value.value = list(item.cylinders)
 
 

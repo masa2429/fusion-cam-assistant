@@ -92,6 +92,17 @@ def _write_instructions(cam, output_folder, document_name, target_setups, group_
     return path
 
 
+def _toolpath_ready(operation):
+    """ツールパスが存在し、モデルに対して最新かどうか。"""
+    try:
+        if not operation.hasToolpath:
+            return False
+        valid = getattr(operation, 'isToolpathValid', None)
+        return True if valid is None else bool(valid)
+    except Exception:
+        return False
+
+
 def _tool_diameter_mm(operation):
     try:
         parameter = operation.tool.parameters.itemByName('tool_diameter')
@@ -183,9 +194,18 @@ def _on_created(args):
             ui.messageBox('操作がありません。')
             return
 
-        # ツールパスの無い操作（未生成・空の取り残し等）は自動でスキップして続行する
-        skipped_names = [op.name for op in operations if not op.hasToolpath]
-        operations = [op for op in operations if op.hasToolpath]
+        # ツールパスが未生成・モデル変更で古くなった操作があれば、先に再生成する
+        if any(not _toolpath_ready(op) for op in operations):
+            fusion_utils.log('未生成/要更新のツールパスがあるため再生成します')
+            try:
+                future = cam.generateAllToolpaths(True)
+                cam_builder._wait_for_generation(future, timeout_seconds=180)
+            except Exception:
+                fusion_utils.log('再生成に失敗:\n' + traceback.format_exc())
+
+        # それでもツールパスの無い操作（空の取り残し等）はスキップして続行する
+        skipped_names = [op.name for op in operations if not _toolpath_ready(op)]
+        operations = [op for op in operations if _toolpath_ready(op)]
         if not operations:
             ui.messageBox('有効なツールパスを持つ操作がありません。先に生成してください。')
             return
