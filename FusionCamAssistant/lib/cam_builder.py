@@ -6,6 +6,7 @@
 #    tools/DumpParameters の結果で確定したら、この先頭の定数を修正すること。
 
 import hashlib
+import math
 import os
 import shutil
 import tempfile
@@ -96,7 +97,7 @@ def build(cam, classify_result, plan_items, config):
         sequence += 1
         try:
             operation = _create_operation_from_template(setup, item.template)
-            _assign_geometry(operation, item)
+            _assign_geometry(operation, item, config)
             if config.get('force_safe_linking', True):
                 _apply_safe_linking(operation, item)
                 _apply_entry_positions(operation, entry_points_map.get(id(item)))
@@ -368,6 +369,8 @@ def _interior_point(face):
 
 
 ENTRY_PLANE_NAME = '自動CAM_進入点平面'
+BOUNDARY_SKETCH_PREFIX = '自動CAM_境界'
+_boundary_sketch_counter = 0
 
 
 def _prepare_entry_positions(items, classify_result):
@@ -383,10 +386,13 @@ def _prepare_entry_positions(items, classify_result):
     design = fusion_utils.active_design()
     if design is None:
         return {}
+    global _boundary_sketch_counter
+    _boundary_sketch_counter = 0
     root = design.rootComponent
     for i in reversed(range(root.sketches.count)):
         sketch = root.sketches.item(i)
-        if sketch.name == ENTRY_SKETCH_NAME:
+        if sketch.name == ENTRY_SKETCH_NAME or \
+                sketch.name.startswith(BOUNDARY_SKETCH_PREFIX):
             sketch.deleteMe()
     for i in reversed(range(root.constructionPlanes.count)):
         plane = root.constructionPlanes.item(i)
@@ -471,14 +477,68 @@ def _apply_safe_linking(operation, item):
             fusion_utils.log(f'{item.label}: 安全化パラメータ {name} を設定できませんでした')
 
 
-def _assign_geometry(operation, item):
+def _assign_geometry(operation, item, config):
     strategy = (item.template.strategy or '').lower() if item.template else ''
     if strategy == 'bore':
         _assign_bore_faces(operation, item)
     elif strategy in POCKET_STRATEGIES:
-        _assign_pockets(operation, item)
+        _assign_pockets(operation, item, config)
     else:
         _assign_contours(operation, item)
+
+
+def _build_extended_boundary_sketch(face, open_edges, margin_cm):
+    """開口辺だけをストック余白側へ margin_cm 平行移動した境界スケッチを作る。
+    閉じた辺・島はエッジをそのまま投影する（形状は正確に維持される）。
+    ユーザーが手作業でやっていた「スケッチで輪郭を描いて境界を広げる」の自動化。"""
+    global _boundary_sketch_counter
+    design = fusion_utils.active_design()
+    if design is None:
+        return None
+    root = design.rootComponent
+    try:
+        sketch = root.sketches.add(face)
+    except Exception:
+        fusion_utils.log('境界スケッチの作成に失敗:\n' + traceback.format_exc())
+        return None
+    _boundary_sketch_counter += 1
+    sketch.name = f'{BOUNDARY_SKETCH_PREFIX}{_boundary_sketch_counter}'
+    outward_by_edge = {edge.tempId: normal for edge, normal in open_edges}
+    lines = sketch.sketchCurves.sketchLines
+    try:
+        for loop in face.loops:
+            for edge in loop.edges:
+                normal = outward_by_edge.get(edge.tempId) if loop.isOuter else None
+                geometry = edge.geometry
+                if normal is not None and \
+                        geometry.curveType == adsk.core.Curve3DTypes.Line3DCurveType:
+                    length = math.hypot(normal.x, normal.y)
+                    if length < 1e-9:
+                        sketch.project(edge)
+                        continue
+                    dx = normal.x / length * margin_cm
+                    dy = normal.y / length * margin_cm
+                    start = edge.startVertex.geometry
+                    end = edge.endVertex.geometry
+                    start_out = adsk.core.Point3D.create(start.x + dx, start.y + dy, start.z)
+                    end_out = adsk.core.Point3D.create(end.x + dx, end.y + dy, end.z)
+                    for p, q in ((start, start_out), (start_out, end_out), (end_out, end)):
+                        if p.distanceTo(q) > 1e-6:
+                            lines.addByTwoPoints(sketch.modelToSketchSpace(p.copy()),
+                                                 sketch.modelToSketchSpace(q.copy()))
+                else:
+                    if normal is not None:
+                        fusion_utils.log('開口辺が直線でないため拡張せずそのまま投影します')
+                    sketch.project(edge)
+    except Exception:
+        fusion_utils.log('境界スケッチの構築に失敗:\n' + traceback.format_exc())
+        sketch.deleteMe()
+        return None
+    try:
+        sketch.isLightBulbOn = False
+    except Exception:
+        pass
+    return sketch
 
 
 def _assign_bore_faces(operation, item):
@@ -507,8 +567,10 @@ def _assign_bore_faces(operation, item):
     parameter.value.value = list(item.cylinders)
 
 
-def _assign_pockets(operation, item):
-    """ポケット/負荷制御: 底面（faces）または閉ループ（loops=くり抜き）を領域として選択。"""
+def _assign_pockets(operation, item, config):
+    """ポケット/負荷制御: 底面（faces）または閉ループ（loops=くり抜き）を領域として選択。
+    部品外形に開いている面は、開口辺を余白側へ拡張した境界スケッチで選択する
+    （ストック端付近での進入の逃げ場を作り、実材料への突っ込みを防ぐ）。"""
     parameter = _find_contours_param(operation, POCKET_PARAM_CANDIDATES)
     if parameter is None:
         raise RuntimeError('ポケット選択パラメータが見つかりません')
@@ -516,8 +578,22 @@ def _assign_pockets(operation, item):
     selections = contours_value.getCurveSelections()
     selections.clear()
     if item.faces:
-        pocket_selection = selections.createNewPocketSelection()
-        pocket_selection.inputGeometry = list(item.faces)
+        open_map = getattr(item, 'open_edge_map', {}) or {}
+        margin_cm = fusion_utils.mm_to_cm(config.get('stock_side_margin_mm', 5.0))
+        plain_faces = []
+        for face in item.faces:
+            open_edges = open_map.get(face.tempId)
+            if open_edges:
+                sketch = _build_extended_boundary_sketch(face, open_edges, margin_cm)
+                if sketch is not None:
+                    sketch_selection = selections.createNewSketchSelection()
+                    sketch_selection.inputGeometry = [sketch]
+                    continue
+                fusion_utils.log(f'{item.label}: 境界拡張に失敗（面選択にフォールバック）')
+            plain_faces.append(face)
+        if plain_faces:
+            pocket_selection = selections.createNewPocketSelection()
+            pocket_selection.inputGeometry = plain_faces
     else:
         # 貫通開口のくり抜き: 閉チェーンを領域境界として選択（領域加工なので向きは不問）
         for loop_edges in item.loops:

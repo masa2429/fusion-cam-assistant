@@ -38,6 +38,9 @@ class PlanItem:
         self.cylinders = []         # bore系: 穴/ざぐりの円筒側面 BRepFace リスト
         # ポケット床を輪郭パスで加工する場合 True（ボトム高さを床ちょうどに補正する）
         self.floor_contour = False
+        # ポケット面の開口辺（部品外形に開いている辺）: face.tempId -> [(edge, 外向き法線)]
+        # 開口辺を持つ面は cam_builder が境界スケッチを拡張して渡す
+        self.open_edge_map = {}
         # 加工サイド（True=反時計回り=内側）。外郭由来の取り残しでは False に上書きする
         self.side_ccw = kind != tr.KIND_GAIKAKU
         # ループごとの加工サイド上書き（面取りのように外側/内側ループが混在する場合）
@@ -275,7 +278,7 @@ def classify(design, registry, config):
     unassigned_circles = {}             # 穴径 -> 個数（スポットドリル対象）
     naikaku_loops = []                  # (ループ, 開口幅mm, 最小特徴半径mm)
     zaguri_faces = []                   # (底面, 径mm, 円筒側面)
-    pocket_faces = []                   # (面, 開口幅mm)
+    pocket_faces = []                   # (面, 開口幅mm, 開口辺リスト)
     chamfer_loops = []                  # 上面の (ループ, 内側ならTrue=CCW)
 
     for body in result.bodies:
@@ -289,6 +292,15 @@ def classify(design, registry, config):
             result.warnings.append(f'ボディ {body.name!r}: 底面が見つからずスキップしました。')
             continue
         bottom = max(bottom_candidates, key=lambda f: f.area)
+
+        # 部品外形の側面（底面の外側ループに接する壁）。ポケット開口辺の判定に使う
+        silhouette_wall_ids = set()
+        for loop in bottom.loops:
+            if loop.isOuter:
+                for edge in loop.edges:
+                    for adjacent in edge.faces:
+                        if adjacent != bottom:
+                            silhouette_wall_ids.add(adjacent.tempId)
 
         for loop in bottom.loops:
             if loop.isOuter:
@@ -326,7 +338,17 @@ def classify(design, registry, config):
                                      _cylinder_face_of(outer_loop.edges.item(0))))
             else:
                 opening = _opening_estimate_mm(outer_loop) if outer_loop else None
-                pocket_faces.append((face, opening))
+                # 部品外形に開いている辺（開口辺）を検出。壁面の外向き法線＝拡張方向
+                open_edges = []
+                if outer_loop is not None:
+                    for edge in outer_loop.edges:
+                        for adjacent in edge.faces:
+                            if adjacent != face and adjacent.tempId in silhouette_wall_ids:
+                                normal = _outward_normal(adjacent)
+                                if normal is not None:
+                                    open_edges.append((edge, normal))
+                                break
+                pocket_faces.append((face, opening, open_edges))
 
         # 上面のループ = 面取りの候補（内側ループ=内側を削る、外側ループ=外側を削る）
         top_candidates = [f for f, z, is_up in faces
@@ -359,11 +381,12 @@ def classify(design, registry, config):
         item.cylinders = [wall for _, wall in entries if wall is not None]
         items.append(item)
 
-    # 内郭ポケット（負荷制御はヘリカル進入が成立する幅の面のみ。
-    # 成立しない細幅の面は輪郭パス（プロファイルランプ）へ自動振替する）
+    # 内郭ポケット（開口面は境界拡張で余白側にヘリカルの余地ができる前提で判定。
+    # 閉じた細幅の面だけ輪郭パス（プロファイルランプ）へ自動振替する）
     items += _group_pocket_faces(registry, pocket_faces,
                                  preferred.get(tr.KIND_POCKET, [5.0, 4.0, 3.0, 1.5]),
-                                 tool_margin, result)
+                                 tool_margin,
+                                 config.get('stock_side_margin_mm', 5.0), result)
 
     # 穴あけ（径ごとに1操作）
     for diameter_mm in sorted(hole_groups):
@@ -487,10 +510,13 @@ def _pocket_template_feasible(template, opening_mm, margin_mm):
     return opening_mm >= need
 
 
-def _group_pocket_faces(registry, face_entries, preferred_diameters, margin_mm, result):
-    """ポケット面をテンプレに割り当てる。進入が成立しないテンプレは選ばず、
-    どのポケット系テンプレでも成立しない細幅の面は、輪郭パス（プロファイルランプ、
-    幅≦2×工具径なら1パスで削り切れる）へ振り替える。"""
+def _group_pocket_faces(registry, face_entries, preferred_diameters, margin_mm,
+                        stock_margin_mm, result):
+    """ポケット面をテンプレに割り当てる。
+    - 開口面（部品外形に開いている面）は境界スケッチをストック余白側へ拡張して
+      加工するため、実効幅 = 開口幅 + 余白 で進入成立を判定する
+    - 閉じた面で進入が成立しない細幅は、輪郭パス（プロファイルランプ、
+      幅≦2×工具径なら1パスで削り切れる）へ振り替える"""
     def sort_key(template):
         set_rank = 0 if template.set_name == registry.preferred_set else 1
         diameter = template.tool_diameter_mm or 0
@@ -500,16 +526,19 @@ def _group_pocket_faces(registry, face_entries, preferred_diameters, margin_mm, 
             pref_rank = len(preferred_diameters)
         return (set_rank, pref_rank, -diameter)
 
-    pocket_by_template = {}
+    pocket_by_template = {}   # name -> [(face, open_edges)]
     contour_by_template = {}
-    for face, opening_mm in face_entries:
+    for face, opening_mm, open_edges in face_entries:
+        effective_mm = opening_mm
+        if open_edges and opening_mm is not None:
+            effective_mm = opening_mm + stock_margin_mm
         candidates = [t for t in registry.find(tr.KIND_POCKET)
-                      if _pocket_template_feasible(t, opening_mm, margin_mm)]
+                      if _pocket_template_feasible(t, effective_mm, margin_mm)]
         if candidates:
             template = sorted(candidates, key=sort_key)[0]
-            pocket_by_template.setdefault(template.name, []).append(face)
+            pocket_by_template.setdefault(template.name, []).append((face, open_edges))
             continue
-        # 細幅: 輪郭テンプレ（contour2d・プロファイルランプ）で床の輪郭を1パス加工
+        # 閉じた細幅: 輪郭テンプレ（contour2d・プロファイルランプ）で床の輪郭を1パス加工
         contour_template = None
         for t in sorted(registry.find(tr.KIND_NAIKAKU), key=sort_key):
             diameter = t.tool_diameter_mm or 0
@@ -525,11 +554,16 @@ def _group_pocket_faces(registry, face_entries, preferred_diameters, margin_mm, 
                 f'幅 {width_text} のポケット面に安全に進入できる工具がありません（未割り当て）。')
 
     items = []
-    for name, faces in pocket_by_template.items():
+    for name, entries in pocket_by_template.items():
         template = registry.by_name(name)
+        open_count = sum(1 for _, open_edges in entries if open_edges)
+        note = f'開口面 {open_count} 件は境界をストック余白側へ拡張して加工' if open_count else ''
         item = PlanItem(tr.KIND_POCKET,
-                        f'内郭ポケット ×{len(faces)}（Φ{template.tool_diameter_mm:g}）', template)
-        item.faces = faces
+                        f'内郭ポケット ×{len(entries)}（Φ{template.tool_diameter_mm:g}）',
+                        template, note=note)
+        item.faces = [face for face, _ in entries]
+        item.open_edge_map = {face.tempId: open_edges
+                              for face, open_edges in entries if open_edges}
         items.append(item)
     for name, faces in contour_by_template.items():
         template = registry.by_name(name)
