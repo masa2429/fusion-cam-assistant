@@ -109,6 +109,7 @@ cd fusion-cam-assistant
 | `post_name_hint` | ポストライブラリから探すポスト名 | `originalmind` |
 | `stock.width_mm` / `depth_mm` | 配置枠・ストックの基準サイズ（**暫定値**） | 280 × 280 |
 | `part_gap_mm` | 部品間隔の下限 | 8.0 |
+| `stock_side_margin_mm` | ストック側面の余白（外郭パスの逃げ場） | 5.0 |
 | `hole_rules` / `dlc_name_rules` | 穴径・DLCテンプレの対応ルール | Φ2.0, Φ2.6 ほか |
 | `preferred_tools` | 加工種別ごとの工具径の優先順位 | 内郭 [4,3,2,1.5] など |
 

@@ -146,17 +146,19 @@ def _create_setup(cam, classify_result, config, report):
     setup = cam.setups.add(setup_input)
     setup.name = SETUP_NAME
 
-    # ストック: 固定ボックス（実機ダンプで確認した手動運用の再現）。
-    # X/Y は既定式のまま＝部品範囲を10mm単位に切り上げて中央配置（job_stockFixedX/Y の既定式）。
-    # Z のみ板厚ちょうどに固定する（既定式だと10mmに切り上がってしまうため）。
+    # ストック: モデル相対ボックス。側面に余白を付けて、ワーク＝ストックになって
+    # 外郭パスが省略される問題を防ぐ（固定ボックスの10mm切り上げだと、ワークが
+    # ちょうど10mmの倍数のとき余白ゼロになる）。上下は板厚ちょうど（切り上げ0）。
+    side_margin = config.get('stock_side_margin_mm', 5.0)
     try:
-        setup.stockMode = adsk.cam.SetupStockModes.FixedBoxStock
+        setup.stockMode = adsk.cam.SetupStockModes.RelativeBoxStock
     except Exception:
         pass
-    _try_set(setup.parameters, 'job_stockMode', "'fixedbox'", report)
-    if classify_result.thickness_mm > 0:
-        _try_set(setup.parameters, 'job_stockFixedZ',
-                 f'{classify_result.thickness_mm:g} mm', report)
+    _try_set(setup.parameters, 'job_stockMode', "'default'", report)  # 'default'=相対ボックス
+    _try_set(setup.parameters, 'job_stockOffsetMode', "'simple'", report)
+    _try_set(setup.parameters, 'job_stockOffsetSides', f'{side_margin:g} mm', report)
+    _try_set(setup.parameters, 'job_stockOffsetTop', '0 mm', report)
+    _try_set(setup.parameters, 'job_stockOffsetBottom', '0 mm', report)
 
     # WCS 原点: ストックボックス左下（候補名を順に試す）
     origin_set = False

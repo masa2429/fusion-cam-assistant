@@ -6,6 +6,7 @@
         "depth_mm": 280
     },
     "part_gap_mm": 8.0,
+    "stock_side_margin_mm": 5.0,
     "hole_rules": [
         { "hole_diameter_mm": 2.0, "template": "[Φ1.5]Φ2.0 穴あけ" },
         { "hole_diameter_mm": 2.6, "template": "[Φ2.0]Φ2.6 穴あけ" }

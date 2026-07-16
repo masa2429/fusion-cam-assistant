@@ -138,6 +138,9 @@ ncProgram.postProcess(postOptions)
       （X/Y の既定式 `Math.ceilto(surfaceXHigh - surfaceXLow; job_stockFixedRoundingValue)` が
       「部品範囲を10mm単位で切り上げ・中央配置」を自動でやる。Z のみ板厚に明示設定する。
       丸め幅は `job_stockFixedRoundingValue` = 10mm）
+      ❗ ただし**ワークが10mmの倍数だと余白ゼロ＝ストックとワークが同寸になり、外郭パスが
+      省略される**（実機確認 2026-07-16）。このため v0.3.1 から**相対ボックス**
+      （`job_stockMode = "'default'"` ＋ `job_stockOffsetSides` で側面余白、上下 0）に変更した
 - [x] **WCS 原点**: `wcs_origin_mode = "'stockPoint'"` ＋ `wcs_origin_boxPoint = "'top 1'"`
       （手動セットアップの実測値。ストック上面の角）
 - [x] `selectSameDiameter`: contour2d 操作には存在しない（drill 戦略用。v1 では不要と確定）
