@@ -1,9 +1,10 @@
 # セットアップ生成 → テンプレートから操作生成 → ジオメトリ割当 → ツールパス生成
 #
 # 使用 API は docs/api-notes.md 準拠（createFromCAMTemplate2 / CurveSelections）。
-# ⚠️ 一部のパラメータ名（ストック寸法・WCS原点の boxPoint 等）は実機未確認のため、
-#    候補名リストを順に試し、失敗したものはログに残す方針にしている。
-#    tools/DumpParameters の結果で確定したら、この先頭の定数を修正すること。
+# ⚠️ 一部のパラメータ名は実機未確認のため、候補名リストを順に試し、失敗したものは
+#    ログに残す方針にしている。tools/DumpParameters の結果で確定したら定数を修正すること。
+#    WCS 原点の 'point' モード＋スケッチ点代入は公式サンプル準拠だが実機未確認
+#    （失敗時は 'stockPoint' + 'top 1' へフォールバック）。確定したら api-notes.md を更新。
 
 import hashlib
 import math
@@ -27,7 +28,9 @@ from . import template_registry as tr
 CONTOUR_PARAM_CANDIDATES = ['contours']
 # pocket2d 系操作のジオメトリパラメータ名の候補（⚠️ pocket 操作は未ダンプ・実機未確認）
 POCKET_PARAM_CANDIDATES = ['pockets']
-# WCS 原点: 手動セットアップの実測値（ストック点モード＋上面の角 'top 1'）
+# WCS 原点のフォールバック: 手動セットアップの実測値（ストック点モード＋上面の角 'top 1'）。
+# 'top N' の番号と物理角の対応はモデル依存で不定（角がズレる実例あり）のため、
+# 本命は 'point' モード＋自前計算のスケッチ点（_create_setup 参照）。失敗時のみ使う。
 WCS_ORIGIN_MODE_CANDIDATES = ["'stockPoint'"]
 WCS_BOX_POINT_CANDIDATES = ["'top 1'"]
 # bore（ヘリカル穴あけ）の円筒面選択パラメータ名の候補（⚠️ 実機未確認。
@@ -152,6 +155,7 @@ def _delete_empty_operations(operations, report):
 
 SETUP_NAME = '自動CAM'
 ENTRY_SKETCH_NAME = '自動CAM_進入点'
+WCS_SKETCH_NAME = '自動CAM_原点'
 # 旧名（v0.1 初期）も置き換え・NC出力の対象にして、過去に生成したセットアップとの互換を保つ
 LEGACY_SETUP_NAMES = ('QUHP 自動セットアップ',)
 SETUP_NAME_PREFIXES = (SETUP_NAME,) + LEGACY_SETUP_NAMES
@@ -170,6 +174,20 @@ def _create_setup(cam, classify_result, config, report):
             pass
     if removed:
         report.notes.append(f'既存の「{SETUP_NAME}」{removed} 件を置き換えました。')
+
+    # 旧い原点スケッチ・構築平面を掃除（参照元のセットアップは上で削除済み）
+    try:
+        design = fusion_utils.active_design()
+        if design is not None:
+            root = design.rootComponent
+            for i in reversed(range(root.sketches.count)):
+                if root.sketches.item(i).name == WCS_SKETCH_NAME:
+                    root.sketches.item(i).deleteMe()
+            for i in reversed(range(root.constructionPlanes.count)):
+                if root.constructionPlanes.item(i).name == WCS_SKETCH_NAME:
+                    root.constructionPlanes.item(i).deleteMe()
+    except Exception:
+        fusion_utils.log('旧原点スケッチの削除に失敗:\n' + traceback.format_exc())
 
     setup_input = cam.setups.createInput(adsk.cam.OperationTypes.MillingOperation)
     setup_input.models = list(classify_result.bodies)
@@ -190,21 +208,78 @@ def _create_setup(cam, classify_result, config, report):
     _try_set(setup.parameters, 'job_stockOffsetTop', '0 mm', report)
     _try_set(setup.parameters, 'job_stockOffsetBottom', '0 mm', report)
 
-    # WCS 原点: ストックボックス左下（候補名を順に試す）
+    # WCS 原点: ストック上面・左下手前（-X/-Y側）の角＝機械側のゼロ合わせ位置。
+    # 'stockPoint' の 'top N' は番号と物理角の対応がモデル依存で不定なため、
+    # 角の座標を自前計算したスケッチ点を 'point' モードで明示指定する。
     origin_set = False
-    for mode in WCS_ORIGIN_MODE_CANDIDATES:
-        if _try_set(setup.parameters, 'wcs_origin_mode', mode, None):
-            for box_point in WCS_BOX_POINT_CANDIDATES:
-                if _try_set(setup.parameters, 'wcs_origin_boxPoint', box_point, None):
-                    origin_set = True
-                    break
+    try:
+        origin_point = _create_wcs_origin_point(classify_result, config)
+        if origin_point is not None and \
+                _try_set(setup.parameters, 'wcs_origin_mode', "'point'", None):
+            setup.parameters.itemByName('wcs_origin_point').value.value = [origin_point]
+            origin_set = True
+            report.notes.append('原点: ストック上面・左下手前の角（自動設定）')
+    except Exception:
+        fusion_utils.log('WCS原点のスケッチ点指定に失敗:\n' + traceback.format_exc())
+    if not origin_set:
+        # フォールバック: 従来のストック点モード（角がズレる場合がある）
+        for mode in WCS_ORIGIN_MODE_CANDIDATES:
+            if _try_set(setup.parameters, 'wcs_origin_mode', mode, None):
+                for box_point in WCS_BOX_POINT_CANDIDATES:
+                    if _try_set(setup.parameters, 'wcs_origin_boxPoint', box_point, None):
+                        origin_set = True
+                        break
+            if origin_set:
+                break
         if origin_set:
-            break
+            report.notes.append(
+                '原点をスケッチ点で指定できず、ストック点（top 1）にフォールバックしました。'
+                '原点の角が「左下手前」になっているか必ず確認してください。')
     if not origin_set:
         report.notes.append(
             '原点をストック左下に設定できませんでした。セットアップ編集で手動設定してください'
             '（DumpParameters の結果で cam_builder.py の候補名を更新すると自動化されます）。')
     return setup
+
+
+def _create_wcs_origin_point(classify_result, config):
+    """ストック上面・左下手前（-X/-Y側）の角にスケッチ点を作って返す。失敗時は None。
+    ストックは相対ボックス（側面余白 stock_side_margin_mm・上下 0）なので、
+    ボディの bbox から角の座標（内部単位 cm）を厳密に計算できる。
+    ※進入点スケッチと同じく、スケッチは必ず「ストック上面の高さ」の構築平面に作る。
+    平面作成に失敗した場合は Z がズレた原点になり危険なので、黙って XY 平面に
+    落とさず例外のまま呼び出し元へ返す（フォールバック経路に入る）。"""
+    design = fusion_utils.active_design()
+    if design is None:
+        return None
+    boxes = [body.boundingBox for body in classify_result.bodies]
+    if not boxes:
+        return None
+    margin_cm = fusion_utils.mm_to_cm(config.get('stock_side_margin_mm', 5.0))
+    x_cm = min(box.minPoint.x for box in boxes) - margin_cm
+    y_cm = min(box.minPoint.y for box in boxes) - margin_cm
+    top_z_cm = max(box.maxPoint.z for box in boxes)
+
+    root = design.rootComponent
+    sketch_plane = root.xYConstructionPlane
+    if abs(top_z_cm) > 1e-6:
+        plane_input = root.constructionPlanes.createInput()
+        plane_input.setByOffset(root.xYConstructionPlane,
+                                adsk.core.ValueInput.createByReal(top_z_cm))
+        plane = root.constructionPlanes.add(plane_input)
+        plane.name = WCS_SKETCH_NAME
+        plane.isLightBulbOn = False
+        sketch_plane = plane
+    sketch = root.sketches.add(sketch_plane)
+    sketch.name = WCS_SKETCH_NAME
+    local = sketch.modelToSketchSpace(
+        adsk.core.Point3D.create(x_cm, y_cm, top_z_cm))
+    point = sketch.sketchPoints.add(local)
+    try:
+        sketch.isLightBulbOn = False
+    except Exception:
+        pass
+    return point
 
 
 def _extract_sub_template(source_path, sub_index, output_path):
