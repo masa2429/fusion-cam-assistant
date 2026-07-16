@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import time
 import traceback
+import xml.etree.ElementTree as ET
 
 import adsk
 import adsk.cam
@@ -28,7 +29,14 @@ POCKET_PARAM_CANDIDATES = ['pockets']
 # WCS 原点: 手動セットアップの実測値（ストック点モード＋上面の角 'top 1'）
 WCS_ORIGIN_MODE_CANDIDATES = ["'stockPoint'"]
 WCS_BOX_POINT_CANDIDATES = ["'top 1'"]
+# bore（ヘリカル穴あけ）の円筒面選択パラメータ名の候補（⚠️ 実機未確認。
+# 見つからない場合は CadObjectParameterValue の候補名をログに出すので、それで確定する）
+BORE_PARAM_CANDIDATES = ['circularFaces', 'holeFaces', 'boreFaces']
+# 領域加工（ポケット系）の戦略名
+POCKET_STRATEGIES = ('pocket2d', 'adaptive2d')
 # -------------------------------------------------------------------------------
+
+_TEMPLATE_NS = 'http://www.hsmworks.com/namespace/hsmworks/document/template'
 
 
 class BuildReport:
@@ -167,16 +175,37 @@ def _create_setup(cam, classify_result, config, report):
     return setup
 
 
+def _extract_sub_template(source_path, sub_index, output_path):
+    """複数テンプレ文書（Inventor 由来の操作セット）から指定の <template> だけを
+    含む単一テンプレ文書を書き出す。"""
+    ET.register_namespace('', _TEMPLATE_NS)
+    root = ET.parse(source_path).getroot()
+    ns = '{%s}' % _TEMPLATE_NS
+    elements = root.findall(f'{ns}template')
+    if sub_index >= len(elements):
+        raise IndexError(f'テンプレート番号 {sub_index} が見つかりません: {source_path}')
+    new_root = ET.Element(root.tag, dict(root.attrib))
+    description = root.find(f'{ns}user-description')
+    if description is not None:
+        new_root.append(description)
+    new_root.append(elements[sub_index])
+    ET.ElementTree(new_root).write(output_path, encoding='UTF-8', xml_declaration=True)
+
+
 def _load_cam_template(template):
     """CAMTemplate を読み込む。
-    createFromFile は内部で ANSI 変換するため日本語・Φ入りパスで失敗する
-    （実機確認済み: 'No mapping for the Unicode character...'）。
-    ASCII 名の一時ファイルへコピーしてから読み込む。"""
-    digest = hashlib.md5(template.path.encode('utf-8')).hexdigest()[:12]
+    - createFromFile は内部で ANSI 変換するため日本語・Φ入りパスで失敗する
+      （実機確認済み）→ ASCII 名の一時ファイル経由で読み込む
+    - 複数テンプレ文書（sub_index あり）は該当テンプレのみ抽出してから読み込む"""
+    digest_source = f'{template.path}#{template.sub_index}'
+    digest = hashlib.md5(digest_source.encode('utf-8')).hexdigest()[:12]
     temp_path = os.path.join(tempfile.gettempdir(),
                              f'quhpcam_{digest}.f3dhsm-template')
     if not os.path.isfile(temp_path):
-        shutil.copyfile(template.path, temp_path)
+        if template.sub_index is None:
+            shutil.copyfile(template.path, temp_path)
+        else:
+            _extract_sub_template(template.path, template.sub_index, temp_path)
     return adsk.cam.CAMTemplate.createFromFile(temp_path)
 
 
@@ -262,45 +291,90 @@ def _signed_area_from_first_edge(loop_edges):
 
 
 def _assign_geometry(operation, item):
+    strategy = (item.template.strategy or '').lower() if item.template else ''
+    if strategy == 'bore':
+        _assign_bore_faces(operation, item)
+    elif strategy in POCKET_STRATEGIES:
+        _assign_pockets(operation, item)
+    else:
+        _assign_contours(operation, item)
+
+
+def _assign_bore_faces(operation, item):
+    """ボア（ヘリカル穴あけ）: 穴/ざぐりの円筒側面を選択する。"""
+    if not item.cylinders:
+        raise RuntimeError('円筒側面が取得できていません（穴の側面が円筒でない可能性）')
+    parameter = None
+    for name in BORE_PARAM_CANDIDATES:
+        candidate = operation.parameters.itemByName(name)
+        if candidate and adsk.cam.CadObjectParameterValue.cast(candidate.value):
+            parameter = candidate
+            break
+    if parameter is None:
+        found = []
+        for i in range(operation.parameters.count):
+            candidate = operation.parameters.item(i)
+            try:
+                if adsk.cam.CadObjectParameterValue.cast(candidate.value):
+                    found.append(candidate.name)
+            except Exception:
+                continue
+        fusion_utils.log(f'ボアの図形パラメータ候補（実機ダンプ）: {found}')
+        raise RuntimeError('ボアの図形選択パラメータが見つかりません'
+                           '（テキストコマンドの候補名を cam_builder.py に追加してください）')
+    parameter.value.value = list(item.cylinders)
+
+
+def _assign_pockets(operation, item):
+    """ポケット/負荷制御: 底面（faces）または閉ループ（loops=くり抜き）を領域として選択。"""
+    parameter = _find_contours_param(operation, POCKET_PARAM_CANDIDATES)
+    if parameter is None:
+        raise RuntimeError('ポケット選択パラメータが見つかりません')
+    contours_value = adsk.cam.CadContours2dParameterValue.cast(parameter.value)
+    selections = contours_value.getCurveSelections()
+    selections.clear()
     if item.faces:
-        parameter = _find_contours_param(operation, POCKET_PARAM_CANDIDATES)
-        if parameter is None:
-            raise RuntimeError('ポケット選択パラメータが見つかりません')
-        contours_value = adsk.cam.CadContours2dParameterValue.cast(parameter.value)
-        selections = contours_value.getCurveSelections()
-        selections.clear()
         pocket_selection = selections.createNewPocketSelection()
         pocket_selection.inputGeometry = list(item.faces)
-        contours_value.applyCurveSelections(selections)
-    if item.loops:
-        parameter = _find_contours_param(operation, CONTOUR_PARAM_CANDIDATES)
-        if parameter is None:
-            raise RuntimeError('輪郭選択パラメータが見つかりません')
-        contours_value = adsk.cam.CadContours2dParameterValue.cast(parameter.value)
-        selections = contours_value.getCurveSelections()
-        selections.clear()
-        # 加工サイドはチェーンの周回方向で決まる（テンプレは左補正）。
-        # エッジ列から作るチェーンの向きはボディ依存で不定のため、符号付き面積で
-        # 現在の向きを求め、外郭=時計回り（外側）・内郭/穴=反時計回り（内側）に揃える。
-        desired_ccw = getattr(item, 'side_ccw', item.kind != tr.KIND_GAIKAKU)
-        reverted_count = 0
+    else:
+        # 貫通開口のくり抜き: 閉チェーンを領域境界として選択（領域加工なので向きは不問）
         for loop_edges in item.loops:
             chain = selections.createNewChainSelection()
             chain.inputGeometry = list(loop_edges)
-            area = _signed_area_from_first_edge(loop_edges)
-            if area is not None:
-                current_ccw = area > 0
-                if current_ccw != desired_ccw:
-                    try:
-                        chain.isReverted = True
-                        reverted_count += 1
-                    except Exception:
-                        fusion_utils.log('ChainSelection.isReverted を設定できませんでした')
-            else:
-                fusion_utils.log(f'{item.label}: ループ方向を判定できないチェーンがあります')
-        if reverted_count:
-            fusion_utils.log(f'{item.label}: {reverted_count} 本のチェーンの向きを反転')
-        contours_value.applyCurveSelections(selections)
+    contours_value.applyCurveSelections(selections)
+
+
+def _assign_contours(operation, item):
+    """輪郭系（contour2d / chamfer2d）: ループをチェーン選択し加工サイドを揃える。"""
+    parameter = _find_contours_param(operation, CONTOUR_PARAM_CANDIDATES)
+    if parameter is None:
+        raise RuntimeError('輪郭選択パラメータが見つかりません')
+    contours_value = adsk.cam.CadContours2dParameterValue.cast(parameter.value)
+    selections = contours_value.getCurveSelections()
+    selections.clear()
+    # 加工サイドはチェーンの周回方向で決まる（テンプレは左補正）。
+    # エッジ列から作るチェーンの向きはボディ依存で不定のため、符号付き面積で
+    # 現在の向きを求め、外郭=時計回り（外側）・内郭/穴=反時計回り（内側）に揃える。
+    default_ccw = getattr(item, 'side_ccw', item.kind != tr.KIND_GAIKAKU)
+    loop_sides = getattr(item, 'loop_sides', None)
+    reverted_count = 0
+    for index, loop_edges in enumerate(item.loops):
+        chain = selections.createNewChainSelection()
+        chain.inputGeometry = list(loop_edges)
+        desired_ccw = loop_sides[index] if loop_sides else default_ccw
+        area = _signed_area_from_first_edge(loop_edges)
+        if area is not None:
+            if (area > 0) != desired_ccw:
+                try:
+                    chain.isReverted = True
+                    reverted_count += 1
+                except Exception:
+                    fusion_utils.log('ChainSelection.isReverted を設定できませんでした')
+        else:
+            fusion_utils.log(f'{item.label}: ループ方向を判定できないチェーンがあります')
+    if reverted_count:
+        fusion_utils.log(f'{item.label}: {reverted_count} 本のチェーンの向きを反転')
+    contours_value.applyCurveSelections(selections)
 
 
 def _try_set(parameters, name, expression, report):

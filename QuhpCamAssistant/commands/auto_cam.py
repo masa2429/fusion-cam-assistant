@@ -40,7 +40,7 @@ def _on_created(args):
         return
 
     config = fusion_utils.load_config()
-    registry = template_registry.Registry(config['template_dir'])
+    registry = template_registry.Registry(config['template_dir'], config)
     result = classifier.classify(design, registry, config)
     if not result.items:
         ui.messageBox('加工候補が見つかりませんでした。\n' + '\n'.join(result.warnings))
@@ -75,7 +75,13 @@ def _on_created(args):
             dropdown = inputs.addDropDownCommandInput(
                 f'quhpTpl{index}', 'テンプレート',
                 adsk.core.DropDownStyles.TextListDropDownStyle)
-            for template in _state['registry'].find(item.kind):
+            options = list(_state['registry'].find(item.kind))
+            if item.kind == template_registry.KIND_NAIKAKU:
+                # 島が残る開口向けに「くり抜き（ポケット/負荷制御）」も選べるようにする
+                options += _state['registry'].find(template_registry.KIND_POCKET)
+            if item.template not in options:
+                options.insert(0, item.template)
+            for template in options:
                 dropdown.listItems.add(template.name, template.name == item.template.name)
             table.addCommandInput(dropdown, row, 2)
 

@@ -35,12 +35,15 @@ class PlanItem:
         self.enabled = template is not None
         self.loops = []             # contour系: ループごとの BRepEdge リスト
         self.faces = []             # pocket系: 底面 BRepFace リスト
+        self.cylinders = []         # bore系: 穴/ざぐりの円筒側面 BRepFace リスト
         # 加工サイド（True=反時計回り=内側）。外郭由来の取り残しでは False に上書きする
         self.side_ccw = kind != tr.KIND_GAIKAKU
+        # ループごとの加工サイド上書き（面取りのように外側/内側ループが混在する場合）
+        self.loop_sides = None      # None or loops と同じ長さの bool リスト
 
     @property
     def selection_count(self):
-        return len(self.loops) + len(self.faces)
+        return max(len(self.loops), len(self.faces), len(self.cylinders))
 
 
 class ClassifyResult:
@@ -85,6 +88,17 @@ def _horizontal_planar_faces(body):
         z = face.boundingBox.minPoint.z
         result.append((face, z, normal.z > 0))
     return result
+
+
+def _cylinder_face_of(circle_edge):
+    """円形エッジに隣接する円筒側面（ボア加工の選択対象）を返す。無ければ None。"""
+    try:
+        for face in circle_edge.faces:
+            if face.geometry.surfaceType == adsk.core.SurfaceTypes.CylinderSurfaceType:
+                return face
+    except Exception:
+        pass
+    return None
 
 
 def _is_full_circle_loop(loop):
@@ -254,12 +268,13 @@ def classify(design, registry, config):
         result.warnings.append('上下面が揃っていないボディがあります（「位置合わせ」を確認）。')
 
     # 収集バッファ
-    outer_loops = []                    # 外郭: ループ（エッジ列）
-    hole_groups = {}                    # 穴径 -> [ループ]
+    outer_loops = []                    # 外郭: (ループ, 凹み特徴半径mm)
+    hole_groups = {}                    # 穴径 -> [(ループ, 円筒側面)]
     unassigned_circles = {}             # 穴径 -> 個数（スポットドリル対象）
     naikaku_loops = []                  # (ループ, 開口幅mm, 最小特徴半径mm)
-    zaguri_faces = []                   # (面, 開口径mm)
+    zaguri_faces = []                   # (底面, 径mm, 円筒側面)
     pocket_faces = []                   # (面, 開口幅mm)
+    chamfer_loops = []                  # 上面の (ループ, 内側ならTrue=CCW)
 
     for body in result.bodies:
         body_z_min = body.boundingBox.minPoint.z
@@ -285,7 +300,8 @@ def classify(design, registry, config):
                 diameter_mm = circle.radius * 2.0 * 10.0
                 template = registry.hole_template(diameter_mm, hole_tolerance)
                 if template is not None:
-                    hole_groups.setdefault(round(diameter_mm, 2), []).append(list(loop.edges))
+                    hole_groups.setdefault(round(diameter_mm, 2), []).append(
+                        (list(loop.edges), _cylinder_face_of(loop.edges.item(0))))
                 elif diameter_mm <= spot_max_dia:
                     key = round(diameter_mm, 2)
                     unassigned_circles[key] = unassigned_circles.get(key, 0) + 1
@@ -304,26 +320,55 @@ def classify(design, registry, config):
             outer_loop = next((lp for lp in face.loops if lp.isOuter), None)
             circle = _is_full_circle_loop(outer_loop) if outer_loop else None
             if circle is not None:
-                zaguri_faces.append((face, circle.radius * 2.0 * 10.0))
+                zaguri_faces.append((face, circle.radius * 2.0 * 10.0,
+                                     _cylinder_face_of(outer_loop.edges.item(0))))
             else:
                 opening = _opening_estimate_mm(outer_loop) if outer_loop else None
                 pocket_faces.append((face, opening))
 
+        # 上面のループ = 面取りの候補（内側ループ=内側を削る、外側ループ=外側を削る）
+        top_candidates = [f for f, z, is_up in faces
+                          if is_up and abs(z - body_z_max) < _Z_TOL]
+        if top_candidates:
+            top = max(top_candidates, key=lambda f: f.area)
+            for loop in top.loops:
+                chamfer_loops.append((list(loop.edges), not loop.isOuter))
+
     items = []
 
-    # ざぐり（工具径ごとにまとめて1操作）
-    items += _group_faces_by_tool(registry, tr.KIND_ZAGURI, zaguri_faces,
-                                  preferred.get(tr.KIND_ZAGURI, [3.0, 2.0, 1.5]), tool_margin)
+    # ざぐり（テンプレごとにまとめて1操作。径一致のボア系があれば優先セット順で選ぶ）
+    zaguri_by_template = {}
+    for face, diameter_mm, wall in zaguri_faces:
+        bore_template = registry.zaguri_template(diameter_mm, hole_tolerance)
+        pocket_template = registry.pick(tr.KIND_ZAGURI, diameter_mm,
+                                        preferred.get(tr.KIND_ZAGURI, [3.0, 2.0, 1.5]),
+                                        tool_margin)
+        candidates = [t for t in (bore_template, pocket_template) if t is not None]
+        if not candidates:
+            result.warnings.append(f'ざぐり Φ{diameter_mm:g} に使えるテンプレがありません。')
+            continue
+        template = sorted(candidates, key=registry._set_order)[0]
+        zaguri_by_template.setdefault(template.name, []).append((face, wall))
+    for name, entries in zaguri_by_template.items():
+        template = registry.by_name(name)
+        item = PlanItem(tr.KIND_ZAGURI,
+                        f'ざぐり ×{len(entries)}（Φ{template.tool_diameter_mm:g}）', template)
+        item.faces = [face for face, _ in entries]
+        item.cylinders = [wall for _, wall in entries if wall is not None]
+        items.append(item)
+
     # 内郭ポケット
     items += _group_faces_by_tool(registry, tr.KIND_POCKET, pocket_faces,
-                                  preferred.get(tr.KIND_POCKET, [5.0, 3.0, 1.5]), tool_margin)
+                                  preferred.get(tr.KIND_POCKET, [5.0, 4.0, 3.0, 1.5]),
+                                  tool_margin)
 
     # 穴あけ（径ごとに1操作）
     for diameter_mm in sorted(hole_groups):
-        loops = hole_groups[diameter_mm]
+        entries = hole_groups[diameter_mm]
         template = registry.hole_template(diameter_mm, hole_tolerance)
-        item = PlanItem(tr.KIND_HOLE, f'穴あけ Φ{diameter_mm:g} ×{len(loops)}', template)
-        item.loops = loops
+        item = PlanItem(tr.KIND_HOLE, f'穴あけ Φ{diameter_mm:g} ×{len(entries)}', template)
+        item.loops = [edges for edges, _ in entries]
+        item.cylinders = [wall for _, wall in entries if wall is not None]
         items.append(item)
 
     # 内郭（工具径ごとにまとめる）＋ 取り残し提案
@@ -346,8 +391,14 @@ def classify(design, registry, config):
     rest_loops = []
     for name, entries in naikaku_by_template.items():
         template = registry.by_name(name)
+        note = ''
+        wide = [o for _, o, _ in entries
+                if o is not None and o > template.tool_diameter_mm * 3]
+        if wide:
+            note = f'開口の広いループが {len(wide)} 件。島が残って飛ぶ場合は「くり抜き」系テンプレに変更'
         item = PlanItem(tr.KIND_NAIKAKU,
-                        f'内郭 ×{len(entries)}（Φ{template.tool_diameter_mm:g}）', template)
+                        f'内郭 ×{len(entries)}（Φ{template.tool_diameter_mm:g}）', template,
+                        note=note)
         item.loops = [e for e, _, _ in entries]
         items.append(item)
         tool_radius = template.tool_diameter_mm / 2.0
@@ -395,6 +446,17 @@ def classify(design, registry, config):
                     rest_item.loops = outer_rest
                     rest_item.side_ccw = False  # 外郭と同じく輪郭の外側を削る
                     items.append(rest_item)
+
+    # 面取り（DLCセット。既定OFF＝必要なときだけチェックを入れる）
+    chamfer_templates = registry.find(tr.KIND_CHAMFER)
+    if chamfer_loops and chamfer_templates:
+        template = chamfer_templates[0]
+        item = PlanItem(tr.KIND_CHAMFER, f'面取り ×{len(chamfer_loops)}', template,
+                        note='上端エッジ全周を面取り。必要なときだけチェックを入れる')
+        item.enabled = False
+        item.loops = [edges for edges, _ in chamfer_loops]
+        item.loop_sides = [inner_ccw for _, inner_ccw in chamfer_loops]
+        items.append(item)
 
     # 未割り当ての円（ボール盤穴）: 情報行として最後に出す
     for diameter_mm in sorted(unassigned_circles):
