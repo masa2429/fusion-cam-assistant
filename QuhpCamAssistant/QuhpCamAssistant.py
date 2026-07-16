@@ -10,7 +10,7 @@ from .lib import fusion_utils, update_check
 
 WORKSPACE_ID = 'CAMEnvironment'  # 製造ワークスペース
 PANEL_ID = 'QuhpCamPanel'
-PANEL_NAME = 'QUHP CAM'
+PANEL_NAME = 'CAM アシスタント'
 
 COMMAND_MODULES = [auto_cam, post_all, layout_check, settings, about]
 
@@ -23,9 +23,11 @@ def run(context):
         if not workspace:
             ui.messageBox('製造ワークスペースが見つかりません。')
             return
+        # 表示名の変更を確実に反映するため、残っていたパネルは作り直す
         panel = workspace.toolbarPanels.itemById(PANEL_ID)
-        if not panel:
-            panel = workspace.toolbarPanels.add(PANEL_ID, PANEL_NAME)
+        if panel:
+            panel.deleteMe()
+        panel = workspace.toolbarPanels.add(PANEL_ID, PANEL_NAME)
         for module in COMMAND_MODULES:
             module.start(panel)
         fusion_utils.log('アドイン起動完了')
