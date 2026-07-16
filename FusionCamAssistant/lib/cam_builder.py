@@ -3,8 +3,8 @@
 # 使用 API は docs/api-notes.md 準拠（createFromCAMTemplate2 / CurveSelections）。
 # ⚠️ 一部のパラメータ名は実機未確認のため、候補名リストを順に試し、失敗したものは
 #    ログに残す方針にしている。tools/DumpParameters の結果で確定したら定数を修正すること。
-#    WCS 原点の 'point' モード＋スケッチ点代入は公式サンプル準拠だが実機未確認
-#    （失敗時は 'stockPoint' + 'top 1' へフォールバック）。確定したら api-notes.md を更新。
+#    WCS 原点は 'point' モード＋スケッチ点のリスト代入で実機確定（2026-07-16）。
+#    失敗時のみ 'stockPoint' + 'top 1' へフォールバックする。
 
 import hashlib
 import math
