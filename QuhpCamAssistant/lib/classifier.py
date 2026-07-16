@@ -16,6 +16,7 @@ import math
 import adsk.core
 import adsk.fusion
 
+from . import fusion_utils
 from . import template_registry as tr
 
 _Z_TOL = 0.005          # cm（0.05mm）: 同一高さとみなす許容
@@ -274,8 +275,10 @@ def classify(design, registry, config):
 
         for loop in bottom.loops:
             if loop.isOuter:
-                outer_loops.append((list(loop.edges),
-                                    _concave_feature_radius_mm(loop, machining_ccw=False)))
+                feature = _concave_feature_radius_mm(loop, machining_ccw=False)
+                fusion_utils.log(f'外郭ループ {body.name!r}: 凹み特徴半径 = '
+                                 f'{"判定失敗" if feature is None else f"{feature:.2f}mm"}')
+                outer_loops.append((list(loop.edges), feature))
                 continue
             circle = _is_full_circle_loop(loop)
             if circle is not None:
