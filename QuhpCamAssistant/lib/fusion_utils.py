@@ -45,11 +45,43 @@ def mm_to_cm(value_mm):
     return value_mm / MM_PER_CM
 
 
+LOCAL_CONFIG_PATH = os.path.join(ADDIN_DIR, 'config.local.json')
+
+
+def _merge_config(base, override):
+    """dict は再帰マージ、それ以外（リスト・スカラ）は置換。"""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_config(base[key], value)
+        else:
+            base[key] = value
+
+
+def save_local_config(updates):
+    """config.local.json に個人設定を保存する（既存内容とマージ。ZIP更新で消えない）。"""
+    current = {}
+    if os.path.isfile(LOCAL_CONFIG_PATH):
+        try:
+            with open(LOCAL_CONFIG_PATH, encoding='utf-8') as f:
+                current = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            log('config.local.json が壊れているため作り直します')
+    _merge_config(current, updates)
+    with open(LOCAL_CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(current, f, ensure_ascii=False, indent=4)
+
+
 def load_config():
-    """config.json を読み、テンプレフォルダ等のパスを解決して返す。"""
+    """config.json を読み、config.local.json（個人設定）を上書きマージして返す。"""
     config_path = os.path.join(ADDIN_DIR, 'config.json')
     with open(config_path, encoding='utf-8') as f:
         config = json.load(f)
+    if os.path.isfile(LOCAL_CONFIG_PATH):
+        try:
+            with open(LOCAL_CONFIG_PATH, encoding='utf-8') as f:
+                _merge_config(config, json.load(f))
+        except (json.JSONDecodeError, OSError):
+            log('config.local.json の読み込みに失敗（無視して既定値を使用）')
     template_dir = config.get('template_dir', '')
     if not template_dir or not os.path.isdir(template_dir):
         # 開発リポジトリ内で動かす場合のフォールバック（アドインの親 = リポジトリルート）

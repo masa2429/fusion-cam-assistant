@@ -4,6 +4,8 @@ __pycache__/
 .vscode/
 Thumbs.db
 Desktop.ini
+# 個人設定（ZIP更新で消えないようリポジトリ管理外）
+QuhpCamAssistant/config.local.json
 # パラメータダンプ等の一時出力
 tools/output/
 dump*.txt
