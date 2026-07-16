@@ -5,14 +5,14 @@ import traceback
 
 import adsk.core
 
-from .commands import auto_cam, layout_check, post_all
+from .commands import auto_cam, layout_check, post_all, settings
 from .lib import fusion_utils
 
 WORKSPACE_ID = 'CAMEnvironment'  # 製造ワークスペース
 PANEL_ID = 'QuhpCamPanel'
 PANEL_NAME = 'QUHP CAM'
 
-COMMAND_MODULES = [auto_cam, post_all, layout_check]
+COMMAND_MODULES = [auto_cam, post_all, layout_check, settings]
 
 
 def run(context):
