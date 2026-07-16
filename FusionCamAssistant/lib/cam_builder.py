@@ -396,7 +396,8 @@ def _prepare_entry_positions(items, classify_result):
             sketch.deleteMe()
     for i in reversed(range(root.constructionPlanes.count)):
         plane = root.constructionPlanes.item(i)
-        if plane.name == ENTRY_PLANE_NAME:
+        if plane.name == ENTRY_PLANE_NAME or \
+                plane.name.startswith(BOUNDARY_SKETCH_PREFIX):
             plane.deleteMe()
     if not adaptive_items:
         return {}
@@ -487,52 +488,145 @@ def _assign_geometry(operation, item, config):
         _assign_contours(operation, item)
 
 
+def _boundary_sketch_plane(root, z_cm):
+    """境界スケッチ用の構築平面（面の高さ）。面の上に直接スケッチを作ると
+    Fusion が面の全エッジ（開口辺含む）を自動投影してしまい境界が二重になるため、
+    同じ高さの構築平面に作る。"""
+    plane_input = root.constructionPlanes.createInput()
+    plane_input.setByOffset(root.xYConstructionPlane,
+                            adsk.core.ValueInput.createByReal(z_cm))
+    plane = root.constructionPlanes.add(plane_input)
+    plane.name = f'{BOUNDARY_SKETCH_PREFIX}平面{_boundary_sketch_counter}'
+    plane.isLightBulbOn = False
+    return plane
+
+
+def _ordered_coedge_entries(loop, outward_by_edge, margin_cm):
+    """外周ループをコエッジ順にたどり、辺ごとの情報を返す。
+    entry = (edge, is_open, start(x,y), end(x,y), offset(dx,dy))"""
+    entries = []
+    for i in range(loop.coEdges.count):
+        coedge = loop.coEdges.item(i)
+        edge = coedge.edge
+        start = edge.startVertex.geometry
+        end = edge.endVertex.geometry
+        if coedge.isOpposedToEdge:
+            start, end = end, start
+        normal = outward_by_edge.get(edge.tempId)
+        is_open = (normal is not None and
+                   edge.geometry.curveType == adsk.core.Curve3DTypes.Line3DCurveType)
+        offset = None
+        if is_open:
+            length = math.hypot(normal.x, normal.y)
+            if length < 1e-9:
+                is_open = False
+            else:
+                offset = (normal.x / length * margin_cm, normal.y / length * margin_cm)
+        entries.append((edge, is_open, (start.x, start.y), (end.x, end.y), offset))
+    return entries
+
+
+def _offset_line_intersection(entry_a, entry_b):
+    """隣接する開口辺のオフセット線同士の交点（マイター接続）。平行なら None。"""
+    _, _, a_start, a_end, a_off = entry_a
+    _, _, b_start, b_end, b_off = entry_b
+    p1 = (a_start[0] + a_off[0], a_start[1] + a_off[1])
+    u1 = (a_end[0] - a_start[0], a_end[1] - a_start[1])
+    p2 = (b_start[0] + b_off[0], b_start[1] + b_off[1])
+    u2 = (b_end[0] - b_start[0], b_end[1] - b_start[1])
+    denom = u1[0] * u2[1] - u1[1] * u2[0]
+    norm = math.hypot(*u1) * math.hypot(*u2)
+    if norm < 1e-12 or abs(denom) / norm < 1e-6:
+        return None
+    t = ((p2[0] - p1[0]) * u2[1] - (p2[1] - p1[1]) * u2[0]) / denom
+    return (p1[0] + u1[0] * t, p1[1] + u1[1] * t)
+
+
 def _build_extended_boundary_sketch(face, open_edges, margin_cm):
-    """開口辺だけをストック余白側へ margin_cm 平行移動した境界スケッチを作る。
-    閉じた辺・島はエッジをそのまま投影する（形状は正確に維持される）。
+    """開口辺をストック余白側へ margin_cm 平行移動した「閉じた」境界スケッチを作る。
+    - 閉じた辺・島はエッジをそのまま投影（形状は正確に維持）
+    - 連続する開口辺はオフセット線同士を交点（マイター）で接続し、
+      多角形の開口でも一続きの拡張領域になるようにする
     ユーザーが手作業でやっていた「スケッチで輪郭を描いて境界を広げる」の自動化。"""
     global _boundary_sketch_counter
     design = fusion_utils.active_design()
     if design is None:
         return None
     root = design.rootComponent
+    _boundary_sketch_counter += 1
     try:
-        sketch = root.sketches.add(face)
+        z_cm = face.pointOnFace.z
+        plane = _boundary_sketch_plane(root, z_cm)
+        sketch = root.sketches.add(plane)
     except Exception:
         fusion_utils.log('境界スケッチの作成に失敗:\n' + traceback.format_exc())
         return None
-    _boundary_sketch_counter += 1
     sketch.name = f'{BOUNDARY_SKETCH_PREFIX}{_boundary_sketch_counter}'
     outward_by_edge = {edge.tempId: normal for edge, normal in open_edges}
     lines = sketch.sketchCurves.sketchLines
+
+    def add_polyline(points_xy):
+        for (x1, y1), (x2, y2) in zip(points_xy, points_xy[1:]):
+            if math.hypot(x2 - x1, y2 - y1) > 1e-6:
+                p = sketch.modelToSketchSpace(adsk.core.Point3D.create(x1, y1, z_cm))
+                q = sketch.modelToSketchSpace(adsk.core.Point3D.create(x2, y2, z_cm))
+                lines.addByTwoPoints(p, q)
+
     try:
         for loop in face.loops:
-            for edge in loop.edges:
-                normal = outward_by_edge.get(edge.tempId) if loop.isOuter else None
-                geometry = edge.geometry
-                if normal is not None and \
-                        geometry.curveType == adsk.core.Curve3DTypes.Line3DCurveType:
-                    length = math.hypot(normal.x, normal.y)
-                    if length < 1e-9:
-                        sketch.project(edge)
-                        continue
-                    dx = normal.x / length * margin_cm
-                    dy = normal.y / length * margin_cm
-                    start = edge.startVertex.geometry
-                    end = edge.endVertex.geometry
-                    start_out = adsk.core.Point3D.create(start.x + dx, start.y + dy, start.z)
-                    end_out = adsk.core.Point3D.create(end.x + dx, end.y + dy, end.z)
-                    for p, q in ((start, start_out), (start_out, end_out), (end_out, end)):
-                        if p.distanceTo(q) > 1e-6:
-                            lines.addByTwoPoints(sketch.modelToSketchSpace(p.copy()),
-                                                 sketch.modelToSketchSpace(q.copy()))
-                else:
-                    if normal is not None:
-                        fusion_utils.log('開口辺が直線でないため拡張せずそのまま投影します')
+            if not loop.isOuter:
+                for edge in loop.edges:
+                    sketch.project(edge)  # 島はそのまま
+                continue
+            entries = _ordered_coedge_entries(loop, outward_by_edge, margin_cm)
+            count = len(entries)
+            if count == 0:
+                continue
+            has_open = any(e[1] for e in entries)
+            if not has_open:
+                for edge, *_ in entries:
                     sketch.project(edge)
+                continue
+            # 開口辺の「連続区間」ごとに、閉じた辺は投影・開口区間はオフセット折れ線を描く。
+            # 区間の先頭が閉じた辺になるよう起点を回転（全部開口なら回転不要）
+            start_index = next((i for i, e in enumerate(entries) if not e[1]), 0)
+            ordered = entries[start_index:] + entries[:start_index]
+            all_open = all(e[1] for e in ordered)
+            i = 0
+            while i < len(ordered):
+                entry = ordered[i]
+                if not entry[1]:
+                    sketch.project(entry[0])
+                    i += 1
+                    continue
+                # 連続する開口辺の区間を集める
+                run = [entry]
+                while i + len(run) < len(ordered) and ordered[i + len(run)][1]:
+                    run.append(ordered[i + len(run)])
+                points = []
+                if not all_open:
+                    points.append(run[0][2])  # 区間開始の元頂点から張り出しへ
+                points.append((run[0][2][0] + run[0][4][0], run[0][2][1] + run[0][4][1]))
+                for a, b in zip(run, run[1:]):
+                    joint = _offset_line_intersection(a, b)
+                    if joint is None:  # 平行（同一直線上）: それぞれの端点を直結
+                        points.append((a[3][0] + a[4][0], a[3][1] + a[4][1]))
+                        points.append((b[2][0] + b[4][0], b[2][1] + b[4][1]))
+                    else:
+                        points.append(joint)
+                points.append((run[-1][3][0] + run[-1][4][0], run[-1][3][1] + run[-1][4][1]))
+                if not all_open:
+                    points.append(run[-1][3])  # 張り出しから区間終了の元頂点へ戻る
+                else:
+                    points.append(points[0])  # 全周開口: オフセット多角形を閉じる
+                add_polyline(points)
+                i += len(run)
     except Exception:
         fusion_utils.log('境界スケッチの構築に失敗:\n' + traceback.format_exc())
-        sketch.deleteMe()
+        try:
+            sketch.deleteMe()
+        except Exception:
+            pass
         return None
     try:
         sketch.isLightBulbOn = False
