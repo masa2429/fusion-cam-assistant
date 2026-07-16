@@ -194,14 +194,13 @@ def _on_created(args):
             ui.messageBox('操作がありません。')
             return
 
-        # ツールパスが未生成・モデル変更で古くなった操作があれば、先に再生成する
-        if any(not _toolpath_ready(op) for op in operations):
-            fusion_utils.log('未生成/要更新のツールパスがあるため再生成します')
-            try:
-                future = cam.generateAllToolpaths(True)
-                cam_builder._wait_for_generation(future, timeout_seconds=180)
-            except Exception:
-                fusion_utils.log('再生成に失敗:\n' + traceback.format_exc())
+        # ポスト前に必ず再生成を通す（skipValid=True なので有効なものはスキップされ高速。
+        # 「要更新」の検出はバージョン差があり当てにならないため無条件で呼ぶ）
+        try:
+            future = cam.generateAllToolpaths(True)
+            cam_builder._wait_for_generation(future, timeout_seconds=180)
+        except Exception:
+            fusion_utils.log('再生成に失敗:\n' + traceback.format_exc())
 
         # それでもツールパスの無い操作（空の取り残し等）はスキップして続行する
         skipped_names = [op.name for op in operations if not _toolpath_ready(op)]
