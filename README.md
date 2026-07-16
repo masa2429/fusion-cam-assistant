@@ -110,6 +110,7 @@ cd fusion-cam-assistant
 | `stock.width_mm` / `depth_mm` | 配置枠・ストックの基準サイズ（**暫定値**） | 280 × 280 |
 | `part_gap_mm` | 部品間隔の下限 | 8.0 |
 | `stock_side_margin_mm` | ストック側面の余白（外郭パスの逃げ場） | 5.0 |
+| `force_safe_linking` | ポケット/負荷制御の進入・リンクを安全化（ストック外からの水平進入と下がったままの移動を禁止）。**実部材は仮想ストックより大きいため必須** | true |
 | `hole_rules` / `dlc_name_rules` | 穴径・DLCテンプレの対応ルール | Φ2.0, Φ2.6 ほか |
 | `preferred_tools` | 加工種別ごとの工具径の優先順位 | 内郭 [4,3,2,1.5] など |
 

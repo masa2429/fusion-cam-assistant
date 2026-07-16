@@ -34,6 +34,14 @@ WCS_BOX_POINT_CANDIDATES = ["'top 1'"]
 BORE_PARAM_CANDIDATES = ['circularFaces', 'holeFaces', 'boreFaces']
 # 領域加工（ポケット系）の戦略名
 POCKET_STRATEGIES = ('pocket2d', 'adaptive2d')
+# ポケット系の進入・リンクの安全化上書き（テンプレ値だと、実部材が仮想ストックより
+# 大きい運用で「ストック外で刃を下ろして水平進入」「下がったままの領域間移動」が起こる）。
+# 存在しないパラメータは黙ってスキップ（pocket2d に retractionPolicy は無い等）。
+SAFE_LINKING_OVERRIDES = [
+    ('pockets_detectOpenPockets', ['false']),      # 開いたポケット扱い＝ストック外進入を禁止
+    ('retractionPolicy', ["'full'", "'all'"]),     # adaptive2d: 領域間は必ず退避高さへ
+    ('keepToolDown', ['false']),                   # pocket2d: 下がったままの移動を禁止
+]
 # -------------------------------------------------------------------------------
 
 _TEMPLATE_NS = 'http://www.hsmworks.com/namespace/hsmworks/document/template'
@@ -75,6 +83,8 @@ def build(cam, classify_result, plan_items, config):
         try:
             operation = _create_operation_from_template(setup, item.template)
             _assign_geometry(operation, item)
+            if config.get('force_safe_linking', True):
+                _apply_safe_linking(operation, item)
             operation.name = f'{sequence:02d}_{item.template.name}'
             report.created.append((operation.name, item.selection_count))
             created_operations.append(operation)
@@ -290,6 +300,27 @@ def _signed_area_from_first_edge(loop_edges):
         p2 = points[(i + 1) % count]
         area += p1.x * p2.y - p2.x * p1.y
     return area / 2.0
+
+
+def _apply_safe_linking(operation, item):
+    """ポケット系（負荷制御/ポケット）の進入・リンクを安全側に上書きする。
+    実部材は仮想ストックより大きいことが多く、ストック外は空気という前提の
+    進入・移動は実材料への突っ込みになるため。"""
+    strategy = (item.template.strategy or '').lower() if item.template else ''
+    if strategy not in POCKET_STRATEGIES:
+        return
+    for name, expressions in SAFE_LINKING_OVERRIDES:
+        parameter = operation.parameters.itemByName(name)
+        if parameter is None:
+            continue
+        for expression in expressions:
+            try:
+                parameter.expression = expression
+                break
+            except Exception:
+                continue
+        else:
+            fusion_utils.log(f'{item.label}: 安全化パラメータ {name} を設定できませんでした')
 
 
 def _assign_geometry(operation, item):

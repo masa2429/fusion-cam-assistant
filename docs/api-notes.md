@@ -116,6 +116,18 @@ ncProgram.postProcess(postOptions)
 - 出力ファイル名は NCProgram 単位で `nc_program_filename` に設定
 - ポストプロセッサ: KitMill RZ420 用 originalmind.cps（https://cam.autodesk.com/hsmposts?p=originalmind）
 
+## 4.5 ポケット系（pocket2d/adaptive2d）のリンク安全化 ✅（実機テンプレXMLで確認 2026-07-16）
+
+テンプレ既定値のままだと、実部材が仮想ストックより大きい KitMill 運用で危険な動きになる：
+
+| パラメータ | テンプレ既定 | 問題 | 上書き値 |
+|---|---|---|---|
+| `pockets_detectOpenPockets` | true | ストック端に近い領域を「開いたポケット」とみなし**ストック外で刃を下ろして水平進入**（実部材に突っ込む） | `false` |
+| `retractionPolicy`（adaptive2d） | 'minimum' | 領域間を**下がったまま**リンク移動（stayDownDistance=5×工具径） | `'full'` |
+| `keepToolDown`（pocket2d） | true | 同上（stayDownDistance=50mm） | `false` |
+
+アドインは操作生成後にこれらを上書きする（cam_builder.py `_apply_safe_linking`、config `force_safe_linking`）。
+
 ## 5. 輪郭分類に使う設計側 API ✅
 
 - `BRepLoop.isOuter`（bool）: 面の外側ループ判定 → 平板の外形 vs 内穴の区別
