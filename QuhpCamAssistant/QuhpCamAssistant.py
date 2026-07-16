@@ -5,14 +5,14 @@ import traceback
 
 import adsk.core
 
-from .commands import auto_cam, layout_check, post_all, settings
-from .lib import fusion_utils
+from .commands import about, auto_cam, layout_check, post_all, settings
+from .lib import fusion_utils, update_check
 
 WORKSPACE_ID = 'CAMEnvironment'  # 製造ワークスペース
 PANEL_ID = 'QuhpCamPanel'
 PANEL_NAME = 'QUHP CAM'
 
-COMMAND_MODULES = [auto_cam, post_all, layout_check, settings]
+COMMAND_MODULES = [auto_cam, post_all, layout_check, settings, about]
 
 
 def run(context):
@@ -29,6 +29,10 @@ def run(context):
         for module in COMMAND_MODULES:
             module.start(panel)
         fusion_utils.log('アドイン起動完了')
+        try:
+            update_check.notify_if_updated()
+        except Exception:
+            pass  # 更新チェックは起動を妨げない
     except Exception:
         if ui:
             ui.messageBox('QUHP CAM Assistant の起動に失敗:\n{}'.format(traceback.format_exc()))
