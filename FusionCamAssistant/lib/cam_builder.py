@@ -84,6 +84,7 @@ def build(cam, classify_result, plan_items, config):
     """確認済みの PlanItem 群からセットアップと操作を一括生成する。"""
     report = BuildReport()
     setup = _create_setup(cam, classify_result, config, report)
+    entry_points_map = _prepare_entry_positions(plan_items)
 
     sequence = 0
     created_operations = []
@@ -96,6 +97,7 @@ def build(cam, classify_result, plan_items, config):
             _assign_geometry(operation, item)
             if config.get('force_safe_linking', True):
                 _apply_safe_linking(operation, item)
+                _apply_entry_positions(operation, entry_points_map.get(id(item)))
             operation.name = f'{sequence:02d}_{item.template.name}'
             report.created.append((operation.name, item.selection_count))
             created_operations.append(operation)
@@ -143,6 +145,7 @@ def _delete_empty_operations(operations, report):
 
 
 SETUP_NAME = '自動CAM'
+ENTRY_SKETCH_NAME = '自動CAM_進入点'
 # 旧名（v0.1 初期）も置き換え・NC出力の対象にして、過去に生成したセットアップとの互換を保つ
 LEGACY_SETUP_NAMES = ('QUHP 自動セットアップ',)
 SETUP_NAME_PREFIXES = (SETUP_NAME,) + LEGACY_SETUP_NAMES
@@ -311,6 +314,108 @@ def _signed_area_from_first_edge(loop_edges):
         p2 = points[(i + 1) % count]
         area += p1.x * p2.y - p2.x * p1.y
     return area / 2.0
+
+
+def _face_boundary_points(face):
+    """面の全ループの折れ線近似点（XY判定用）。"""
+    points = []
+    for loop in face.loops:
+        for edge in loop.edges:
+            stroke = _edge_points(edge)
+            if stroke:
+                points.extend(stroke)
+    return points
+
+
+def _interior_point(face):
+    """面上で境界から最も遠い点（ヘリカル進入に最適な場所）をサンプリングで求める。"""
+    try:
+        evaluator = face.evaluator
+        ok, parametric_range = evaluator.parametricRange()
+        if not ok:
+            return None
+        boundary = _face_boundary_points(face)
+        if not boundary:
+            return None
+        best_point = None
+        best_distance = -1.0
+        grid = 15
+        for i in range(1, grid):
+            for j in range(1, grid):
+                u = parametric_range.minPoint.x + \
+                    (parametric_range.maxPoint.x - parametric_range.minPoint.x) * i / grid
+                v = parametric_range.minPoint.y + \
+                    (parametric_range.maxPoint.y - parametric_range.minPoint.y) * j / grid
+                parameter = adsk.core.Point2D.create(u, v)
+                if not evaluator.isParameterOnFace(parameter):
+                    continue
+                ok2, world = evaluator.getPointAtParameter(parameter)
+                if not ok2:
+                    continue
+                distance = min((world.x - b.x) ** 2 + (world.y - b.y) ** 2
+                               for b in boundary)
+                if distance > best_distance:
+                    best_distance = distance
+                    best_point = world
+        return best_point
+    except Exception:
+        return None
+
+
+def _prepare_entry_positions(items):
+    """負荷制御（adaptive2d）の各ポケット面に対し、境界から最も遠い内部点の
+    進入点スケッチを作る。Fusion 任せだと端の細い場所で垂直プランジに落ちるため、
+    ヘリカルが確実に成立する場所から進入させる。"""
+    adaptive_items = [
+        item for item in items
+        if item.enabled and item.template is not None and item.faces
+        and (item.template.strategy or '').lower() == 'adaptive2d']
+    design = fusion_utils.active_design()
+    if design is None:
+        return {}
+    root = design.rootComponent
+    for i in reversed(range(root.sketches.count)):
+        sketch = root.sketches.item(i)
+        if sketch.name == ENTRY_SKETCH_NAME:
+            sketch.deleteMe()
+    if not adaptive_items:
+        return {}
+    sketch = root.sketches.add(root.xYConstructionPlane)
+    sketch.name = ENTRY_SKETCH_NAME
+    points_by_item = {}
+    for item in adaptive_items:
+        sketch_points = []
+        for face in item.faces:
+            world = _interior_point(face)
+            if world is None:
+                fusion_utils.log(f'{item.label}: 進入点を計算できない面があります')
+                continue
+            local = sketch.modelToSketchSpace(
+                adsk.core.Point3D.create(world.x, world.y, 0))
+            sketch_points.append(sketch.sketchPoints.add(local))
+        if sketch_points:
+            points_by_item[id(item)] = sketch_points
+    try:
+        sketch.isLightBulbOn = False
+    except Exception:
+        pass
+    return points_by_item
+
+
+def _apply_entry_positions(operation, sketch_points):
+    """adaptive2d の entryPositions に進入点を設定する。"""
+    if not sketch_points:
+        return
+    parameter = operation.parameters.itemByName('entryPositions')
+    if parameter is None:
+        return
+    value = adsk.cam.CadObjectParameterValue.cast(parameter.value)
+    if value is None:
+        return
+    try:
+        value.value = list(sketch_points)
+    except Exception:
+        fusion_utils.log('entryPositions の設定に失敗:\n' + traceback.format_exc())
 
 
 def _apply_safe_linking(operation, item):
