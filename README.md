@@ -59,7 +59,7 @@ NC ファイルの出力までを数クリックにする。
 2. 展開したフォルダを**消さない場所**（ドキュメント配下など）に置く
    （アドインはこのフォルダを参照し続けるため、Downloads に置いたまま消すと壊れる）
 3. フォルダ内の **install.bat をダブルクリック**
-4. Fusion で：ユーティリティ → アドイン（Shift+S）→ QuhpCamAssistant を「実行」
+4. Fusion で：ユーティリティ → アドイン（Shift+S）→ FusionCamAssistant を「実行」
    （「起動時に実行」にチェック推奨）
 
 ### ZIP でアップデート
@@ -73,15 +73,18 @@ NC ファイルの出力までを数クリックにする。
 
 新バージョンが出ると起動時に通知が表示される。
 
+**v0.2 以前（アドイン名 QuhpCamAssistant）からの移行**: フォルダを更新したあと
+**install.bat を一度実行**する（旧リンクは自動で削除され、新しい名前で登録し直される）。
+
 ### アンインストール
 
-1. Fusion を閉じる（起動中なら Shift+S → QuhpCamAssistant を停止し「起動時に実行」のチェックを外す）
+1. Fusion を閉じる（起動中なら Shift+S → FusionCamAssistant を停止し「起動時に実行」のチェックを外す）
 2. フォルダ内の **uninstall.bat をダブルクリック** — Fusion への登録（リンク）と一時ファイルが消える
 3. 不要ならフォルダごと削除する（テンプレートや個人設定もここに入っている）
 
 補足:
 - 生成済みの切削データ（セットアップ「自動CAM」等）は各ドキュメント内に残る。不要ならブラウザから削除する
-- uninstall.bat が使えない場合の手動削除: `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\QuhpCamAssistant`
+- uninstall.bat が使えない場合の手動削除: `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\FusionCamAssistant`
   を削除する（**リンクなので中身は消えない**。ZIP 展開先を直接コピーした場合は実体なので注意）
 
 ### git でインストール（更新が楽）
@@ -97,7 +100,7 @@ cd fusion-cam-assistant
 ## 設定
 
 ほとんどの設定は「**設定**」コマンド（所有工具・優先セット）で足りる。
-細かい値を変えたいときは `QuhpCamAssistant/config.local.json` に config.json と同じキーを書く
+細かい値を変えたいときは `FusionCamAssistant/config.local.json` に config.json と同じキーを書く
 （上書きマージされ、アップデートで消えない）。**config.json 本体は編集しないこと。**
 
 | キー | 意味 | 既定値 |
@@ -119,8 +122,8 @@ cd fusion-cam-assistant
 ## トラブルシューティング
 
 - まず「**バージョン情報**」コマンドを実行して状態を確認する（テンプレ件数・ポスト解決・更新有無）
-- 詳しいログは Fusion のテキストコマンドウィンドウ、または `%TEMP%\quhpcam.log`
-- **アドイン一覧に QuhpCamAssistant が2つ出る** — 手動追加とリンクの重複。どちらか片方だけを実行する
+- 詳しいログは Fusion のテキストコマンドウィンドウ、または `%TEMP%\fusioncam.log`
+- **アドイン一覧に FusionCamAssistant が2つ出る** — 手動追加とリンクの重複。どちらか片方だけを実行する
 - **「テンプレートが見つかりません」** — 展開フォルダを移動/削除していないか確認
 - **ポストが見つからない** — ポストライブラリ（ローカル）に originalmind.cps を登録する
 - 不具合は Issue へ。バージョン情報のスクショとログがあると早い

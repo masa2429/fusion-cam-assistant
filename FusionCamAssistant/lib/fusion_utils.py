@@ -34,11 +34,11 @@ def ui():
     return app().userInterface
 
 
-LOG_FILE = os.path.join(tempfile.gettempdir(), 'quhpcam.log')
+LOG_FILE = os.path.join(tempfile.gettempdir(), 'fusioncam.log')
 
 
 def log(message):
-    text = '[QuhpCam] {}'.format(message)
+    text = '[FusionCam] {}'.format(message)
     try:
         app().log(text)
     except Exception:

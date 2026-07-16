@@ -13,8 +13,8 @@ import adsk.fusion
 
 from ..lib import classifier, fusion_utils
 
-COMMAND_ID = 'quhpLayoutCheck'
-FRAME_SKETCH_NAME = 'QUHP 配置枠 280x280'
+COMMAND_ID = 'fcaLayoutCheck'
+FRAME_SKETCH_NAME = '配置枠 280x280'
 _panel = None
 
 
@@ -116,7 +116,7 @@ def _on_created(args):
         if not has_frame:
             answer = ui.messageBox(
                 '\n'.join(lines) + '\n\n配置ガイドの枠スケッチ（280×280、原点基準）を作成しますか？',
-                'QUHP 配置チェック',
+                '配置チェック',
                 adsk.core.MessageBoxButtonTypes.YesNoButtonType)
             if answer == adsk.core.DialogResults.DialogYes:
                 sketch = root.sketches.add(root.xYConstructionPlane)
@@ -126,6 +126,6 @@ def _on_created(args):
                     fusion_utils.mm_to_cm(width_limit), fusion_utils.mm_to_cm(depth_limit), 0)
                 sketch.sketchCurves.sketchLines.addTwoPointRectangle(corner_1, corner_2)
         else:
-            ui.messageBox('\n'.join(lines), 'QUHP 配置チェック')
+            ui.messageBox('\n'.join(lines), '配置チェック')
     except Exception:
         ui.messageBox('配置チェックに失敗:\n{}'.format(traceback.format_exc()))

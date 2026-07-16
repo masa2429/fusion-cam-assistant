@@ -200,7 +200,7 @@ def _load_cam_template(template):
     digest_source = f'{template.path}#{template.sub_index}'
     digest = hashlib.md5(digest_source.encode('utf-8')).hexdigest()[:12]
     temp_path = os.path.join(tempfile.gettempdir(),
-                             f'quhpcam_{digest}.f3dhsm-template')
+                             f'fusioncam_{digest}.f3dhsm-template')
     if not os.path.isfile(temp_path):
         if template.sub_index is None:
             shutil.copyfile(template.path, temp_path)

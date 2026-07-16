@@ -9,12 +9,12 @@ from . import fusion_utils
 
 REPO_URL = 'https://github.com/masa2429/fusion-cam-assistant'
 _RAW_MANIFEST_URL = ('https://raw.githubusercontent.com/masa2429/'
-                     'fusion-cam-assistant/main/QuhpCamAssistant/QuhpCamAssistant.manifest')
+                     'fusion-cam-assistant/main/FusionCamAssistant/FusionCamAssistant.manifest')
 
 
 def local_version():
     try:
-        manifest_path = os.path.join(fusion_utils.ADDIN_DIR, 'QuhpCamAssistant.manifest')
+        manifest_path = os.path.join(fusion_utils.ADDIN_DIR, 'FusionCamAssistant.manifest')
         with open(manifest_path, encoding='utf-8') as f:
             return json.load(f).get('version', '0.0.0')
     except Exception:
@@ -51,8 +51,8 @@ def notify_if_updated():
         return
     fusion_utils.save_local_config({'update_notified_version': remote})
     fusion_utils.ui().messageBox(
-        f'QUHP CAM Assistant の新バージョン v{remote} があります'
+        f'Fusion CAM Assistant の新バージョン v{remote} があります'
         f'（現在 v{local_version()}）。\n\n'
         'README の「ZIP でアップデート」の手順で更新してください。\n'
         f'{REPO_URL}',
-        'QUHP CAM Assistant')
+        'Fusion CAM Assistant')

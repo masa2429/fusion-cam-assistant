@@ -9,7 +9,7 @@ import adsk.core
 
 from ..lib import fusion_utils, template_registry
 
-COMMAND_ID = 'quhpSettings'
+COMMAND_ID = 'fcaSettings'
 _panel = None
 _state = {}  # {'tool_keys': [key, ...]}
 
@@ -54,14 +54,14 @@ def _on_created(args):
 
     inputs = command.commandInputs
     header = inputs.addTextBoxCommandInput(
-        'quhpSettingsHeader', '',
+        'fcaSettingsHeader', '',
         '所有している工具にチェックを入れてください。\n'
         'チェックの無い工具のテンプレートは自動割当・選択肢から除外されます。',
         3, True)
     header.isFullWidth = True
 
     dropdown = inputs.addDropDownCommandInput(
-        'quhpPreferredSet', '優先テンプレセット',
+        'fcaPreferredSet', '優先テンプレセット',
         adsk.core.DropDownStyles.TextListDropDownStyle)
     for set_name in (template_registry.SET_STANDARD, template_registry.SET_DLC):
         dropdown.listItems.add(set_name, set_name == registry.preferred_set)
@@ -70,7 +70,7 @@ def _on_created(args):
     _state['tool_keys'] = tool_keys
     for index, key in enumerate(tool_keys):
         owned = registry.owned_tools is None or key in registry.owned_tools
-        inputs.addBoolValueInput(f'quhpTool{index}', _tool_label(key), True, '', owned)
+        inputs.addBoolValueInput(f'fcaTool{index}', _tool_label(key), True, '', owned)
 
     command.okButtonText = '保存'
     command.execute.add(fusion_utils.keep(_ExecuteHandler()))
@@ -83,10 +83,10 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             inputs = args.command.commandInputs
             owned = []
             for index, key in enumerate(_state.get('tool_keys', [])):
-                checkbox = inputs.itemById(f'quhpTool{index}')
+                checkbox = inputs.itemById(f'fcaTool{index}')
                 if checkbox is not None and checkbox.value:
                     owned.append(key)
-            dropdown = inputs.itemById('quhpPreferredSet')
+            dropdown = inputs.itemById('fcaPreferredSet')
             preferred = dropdown.selectedItem.name if dropdown and dropdown.selectedItem \
                 else template_registry.SET_STANDARD
             fusion_utils.save_local_config({

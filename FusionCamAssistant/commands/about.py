@@ -9,7 +9,7 @@ import adsk.core
 
 from ..lib import fusion_utils, template_registry, update_check
 
-COMMAND_ID = 'quhpAbout'
+COMMAND_ID = 'fcaAbout'
 _panel = None
 
 
@@ -44,7 +44,7 @@ def _post_status(config):
 def _on_created(args):
     ui = fusion_utils.ui()
     try:
-        lines = [f'QUHP CAM Assistant v{update_check.local_version()}']
+        lines = [f'Fusion CAM Assistant v{update_check.local_version()}']
         remote = update_check.newer_remote_version()
         if remote:
             lines.append(f'⚠ 新バージョン v{remote} があります（README の手順で更新）')
@@ -75,6 +75,6 @@ def _on_created(args):
 
         lines.append('')
         lines.append(f'リポジトリ: {update_check.REPO_URL}')
-        ui.messageBox('\n'.join(lines), 'QUHP CAM Assistant 診断')
+        ui.messageBox('\n'.join(lines), 'Fusion CAM Assistant 診断')
     except Exception:
         ui.messageBox('診断に失敗:\n{}'.format(traceback.format_exc()))

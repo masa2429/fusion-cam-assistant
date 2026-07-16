@@ -10,7 +10,7 @@ import adsk.core
 
 from ..lib import cam_builder, classifier, fusion_utils, template_registry
 
-COMMAND_ID = 'quhpAutoCam'
+COMMAND_ID = 'fcaAutoCam'
 _panel = None
 _state = {}  # {'result': ClassifyResult, 'registry': Registry, 'config': dict}
 
@@ -56,24 +56,24 @@ def _on_created(args):
     if result.warnings:
         header += '\n⚠ ' + '\n⚠ '.join(result.warnings)
     header_rows = 4 + 2 * len(result.warnings)
-    header_input = inputs.addTextBoxCommandInput('quhpHeader', '', header, header_rows, True)
+    header_input = inputs.addTextBoxCommandInput('fcaHeader', '', header, header_rows, True)
     header_input.isFullWidth = True
 
-    table = inputs.addTableCommandInput('quhpTable', '加工一覧', 3, '1:5:4')
+    table = inputs.addTableCommandInput('fcaTable', '加工一覧', 3, '1:5:4')
     table.isFullWidth = True
     table.maximumVisibleRows = 12
     for index, item in enumerate(result.items):
-        checkbox = inputs.addBoolValueInput(f'quhpChk{index}', '適用', True, '', item.enabled)
+        checkbox = inputs.addBoolValueInput(f'fcaChk{index}', '適用', True, '', item.enabled)
         checkbox.isEnabled = item.template is not None
         label_text = item.label + (f'\n{item.note}' if item.note else '')
-        label = inputs.addTextBoxCommandInput(f'quhpLbl{index}', '', label_text,
+        label = inputs.addTextBoxCommandInput(f'fcaLbl{index}', '', label_text,
                                               2 if item.note else 1, True)
         row = table.rowCount
         table.addCommandInput(checkbox, row, 0)
         table.addCommandInput(label, row, 1)
         if item.template is not None:
             dropdown = inputs.addDropDownCommandInput(
-                f'quhpTpl{index}', 'テンプレート',
+                f'fcaTpl{index}', 'テンプレート',
                 adsk.core.DropDownStyles.TextListDropDownStyle)
             options = list(_state['registry'].find(item.kind))
             if item.kind == template_registry.KIND_NAIKAKU:
@@ -99,10 +99,10 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             registry = _state['registry']
 
             for index, item in enumerate(result.items):
-                checkbox = inputs.itemById(f'quhpChk{index}')
+                checkbox = inputs.itemById(f'fcaChk{index}')
                 if checkbox is not None:
                     item.enabled = checkbox.value and checkbox.isEnabled
-                dropdown = inputs.itemById(f'quhpTpl{index}')
+                dropdown = inputs.itemById(f'fcaTpl{index}')
                 if dropdown is not None and dropdown.selectedItem is not None:
                     selected = registry.by_name(dropdown.selectedItem.name)
                     if selected is not None:
@@ -110,6 +110,6 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
 
             cam = fusion_utils.active_cam()
             report = cam_builder.build(cam, result, result.items, _state['config'])
-            ui.messageBox(report.summary(), 'QUHP CAM Assistant')
+            ui.messageBox(report.summary(), 'Fusion CAM Assistant')
         except Exception:
             ui.messageBox('生成に失敗:\n{}'.format(traceback.format_exc()))

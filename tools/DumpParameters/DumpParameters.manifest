@@ -1,7 +1,7 @@
 {
     "autodeskProduct": "Fusion360",
     "type": "script",
-    "author": "QUHP",
+    "author": "Masato Morita",
     "description": {
         "": "CAM セットアップ・オペレーションの全パラメータをテキストにダンプする（api-notes.md の実機確認用）"
     },

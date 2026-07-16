@@ -18,7 +18,7 @@ from ..lib import cam_builder, fusion_utils
 
 _NC_NAME_RE = re.compile(r'^\d+_flat')
 
-COMMAND_ID = 'quhpPostAll'
+COMMAND_ID = 'fcaPostAll'
 _panel = None
 
 
@@ -61,7 +61,7 @@ def _write_instructions(cam, output_folder, document_name, target_setups, group_
     """加工指示書.txt を出力フォルダに書き出す。失敗しても NC 出力は成功扱い。"""
     lines = [
         '=' * 46,
-        'QUHP CAM 加工指示書',
+        'CAM 加工指示書',
         '=' * 46,
         f'作成日時    : {datetime.datetime.now():%Y-%m-%d %H:%M}',
         f'ドキュメント: {document_name}',

@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "addin",
+    "id": "8ec48466-5c3a-47c6-bd83-823f31059495",
+    "author": "Masato Morita",
+    "description": {
+        "": "Fusion CAM Assistant: 切削データ作成の自動化（セットアップ生成・輪郭/穴の自動選択とテンプレート適用・NC出力・配置チェック）"
+    },
+    "version": "0.3.0",
+    "runOnStartup": true,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
