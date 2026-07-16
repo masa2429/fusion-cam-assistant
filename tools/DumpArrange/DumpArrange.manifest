@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "Masato Morita",
+    "description": {
+        "": "整列（Arrange）API の実機調査ダンプ（自動配置コマンド実装前の api-notes.md 確定用）"
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
