@@ -49,6 +49,8 @@
 
 ## Git
 
+- **ブランチ運用**: 日常の開発・修正は `dev` にコミットする。`main` は安定版（メンバーの ZIP ダウンロード・更新通知の参照先）
+- **リリース手順**: 実機検証が済んだら dev → main にマージし、`FusionCamAssistant.manifest` の `version` を上げる（更新通知は version 比較で飛ぶため、リリース時だけメンバーに通知される）
 - コミットメッセージは Conventional Commits 形式、説明は日本語
 - **Co-Authored-By 等の AI 共著者トレーラーを付けないこと**（コミット者は人間のみ。GitHub の contributor 表示に AI を出さない）
 - 形式: `type(scope)：日本語の説明`（例: `feat(addin)：セットアップ自動作成を追加`）

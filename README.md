@@ -132,6 +132,7 @@ cd fusion-cam-assistant
 
 ## 開発者向け
 
+- ブランチ運用: `main` は安定版（ZIP・更新通知の参照先）、開発は `dev` で行いリリース時にマージ＋version 更新
 - [CLAUDE.md](CLAUDE.md) — 開発ルール・ミスの記録（AI アシスタント用の指示書を兼ねる）
 - [docs/api-notes.md](docs/api-notes.md) — Fusion CAM API の調査結果（廃止 API・実機確認済みパラメータ名）。**CAM API を触る前に必読**
 - [tools/DumpParameters](tools/DumpParameters) — セットアップ・操作の全パラメータをダンプする調査用スクリプト
