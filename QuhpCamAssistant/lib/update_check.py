@@ -7,9 +7,9 @@ import urllib.request
 
 from . import fusion_utils
 
-REPO_URL = 'https://github.com/masa2429/quhp-cam-assistant'
+REPO_URL = 'https://github.com/masa2429/fusion-cam-assistant'
 _RAW_MANIFEST_URL = ('https://raw.githubusercontent.com/masa2429/'
-                     'quhp-cam-assistant/main/QuhpCamAssistant/QuhpCamAssistant.manifest')
+                     'fusion-cam-assistant/main/QuhpCamAssistant/QuhpCamAssistant.manifest')
 
 
 def local_version():
