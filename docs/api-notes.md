@@ -126,6 +126,11 @@ ncProgram.postProcess(postOptions)
 | `retractionPolicy`（adaptive2d） | 'minimum' | 領域間を**下がったまま**リンク移動（stayDownDistance=5×工具径） | `'full'` |
 | `keepToolDown`（pocket2d） | true | 同上（stayDownDistance=50mm） | `false` |
 
+さらに adaptive2d は `rampType='helix'` のままだと**ヘリカル径が入らない細い領域で垂直プランジに
+フォールバックする**（実機確認 2026-07-16）。`rampType='smooth profile'` にすると adaptive2d では
+ヘリカル併用のまま（`allowHelicalRamps = rampType != 'predrill'`）細い場所だけ輪郭沿いランプになる。
+pocket2d は helix 指定時に輪郭ランプへのフォールバックが元から有効（`allowContourRamps`）。
+
 アドインは操作生成後にこれらを上書きする（cam_builder.py `_apply_safe_linking`、config `force_safe_linking`）。
 
 ## 5. 輪郭分類に使う設計側 API ✅

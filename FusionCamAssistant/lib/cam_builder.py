@@ -36,12 +36,23 @@ BORE_PARAM_CANDIDATES = ['circularFaces', 'holeFaces', 'boreFaces']
 POCKET_STRATEGIES = ('pocket2d', 'adaptive2d')
 # ポケット系の進入・リンクの安全化上書き（テンプレ値だと、実部材が仮想ストックより
 # 大きい運用で「ストック外で刃を下ろして水平進入」「下がったままの領域間移動」が起こる）。
-# 存在しないパラメータは黙ってスキップ（pocket2d に retractionPolicy は無い等）。
-SAFE_LINKING_OVERRIDES = [
-    ('pockets_detectOpenPockets', ['false']),      # 開いたポケット扱い＝ストック外進入を禁止
-    ('retractionPolicy', ["'full'", "'all'"]),     # adaptive2d: 領域間は必ず退避高さへ
-    ('keepToolDown', ['false']),                   # pocket2d: 下がったままの移動を禁止
-]
+# 存在しないパラメータは黙ってスキップする。
+SAFE_LINKING_OVERRIDES = {
+    'adaptive2d': [
+        ('pockets_detectOpenPockets', ['false']),   # 開いたポケット扱い＝ストック外進入を禁止
+        ('retractionPolicy', ["'full'", "'all'"]),  # 領域間は必ず退避高さへ
+        # helix 一本だとヘリカル径が入らない細い領域で垂直プランジに落ちる。
+        # 'smooth profile' は adaptive2d ではヘリカル併用可（allowHelicalRamps は
+        # predrill 以外 true）なので、細い場所だけ輪郭沿いランプになる
+        ('rampType', ["'smooth profile'", "'profile'"]),
+    ],
+    'pocket2d': [
+        ('pockets_detectOpenPockets', ['false']),
+        ('keepToolDown', ['false']),                # 下がったままの移動を禁止
+        # rampType は 'helix' のまま（pocket2d は helix 指定時に輪郭ランプへの
+        # フォールバックが有効: allowContourRamps）
+    ],
+}
 # -------------------------------------------------------------------------------
 
 _TEMPLATE_NS = 'http://www.hsmworks.com/namespace/hsmworks/document/template'
@@ -307,9 +318,10 @@ def _apply_safe_linking(operation, item):
     実部材は仮想ストックより大きいことが多く、ストック外は空気という前提の
     進入・移動は実材料への突っ込みになるため。"""
     strategy = (item.template.strategy or '').lower() if item.template else ''
-    if strategy not in POCKET_STRATEGIES:
+    overrides = SAFE_LINKING_OVERRIDES.get(strategy)
+    if not overrides:
         return
-    for name, expressions in SAFE_LINKING_OVERRIDES:
+    for name, expressions in overrides:
         parameter = operation.parameters.itemByName(name)
         if parameter is None:
             continue
