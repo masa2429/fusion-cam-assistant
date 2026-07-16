@@ -15,6 +15,7 @@
 import json
 import traceback
 
+import adsk
 import adsk.core
 import adsk.fusion
 
@@ -22,6 +23,7 @@ from ..lib import fusion_utils
 from . import layout_check
 
 COMMAND_ID = 'fcaAutoPlace'
+DESIGN_WORKSPACE_ID = 'FusionSolidEnvironment'
 FEATURE_NAME = '自動配置'
 ATTR_GROUP = 'FusionCamAssistant'
 ATTR_NAME = 'autoPlace'
@@ -288,33 +290,56 @@ def _on_created(args):
         if answer != adsk.core.DialogResults.DialogYes:
             return
 
+        # 整列は設計フィーチャのため、製造ワークスペースがアクティブなままだと
+        # arrangeComponents.add が「No fusion asset adapter」で失敗する。
+        # 作成の間だけデザインワークスペースへ切り替え、終わったら元に戻す。
         notes = []
-        removed = _delete_previous_features(arrange_features)
-        if removed:
-            notes.append(f'前回の自動配置フィーチャ {removed} 件を置き換えました。')
-
-        feature, solver_used = _create_arrange(
-            root, arrange_features, occurrences, width_mm, depth_mm,
-            gap_mm, edge_mm, solver_mode, notes)
-        if feature is None:
-            ui.messageBox('整列フィーチャを作成できませんでした。\n'
-                          '詳細はテキストコマンドウィンドウ / %TEMP%\\fusioncam.log を確認してください。',
-                          '自動配置')
-            return
+        previous_workspace = None
+        try:
+            active_workspace = ui.activeWorkspace
+            if active_workspace and active_workspace.id != DESIGN_WORKSPACE_ID:
+                design_workspace = ui.workspaces.itemById(DESIGN_WORKSPACE_ID)
+                if design_workspace:
+                    previous_workspace = active_workspace
+                    design_workspace.activate()
+                    adsk.doEvents()
+        except Exception:
+            fusion_utils.log('デザインワークスペースへの切替に失敗:\n' + traceback.format_exc())
 
         try:
-            feature.name = FEATURE_NAME
-        except Exception:
-            pass
-        try:
-            feature.attributes.add(ATTR_GROUP, ATTR_NAME, '1')
-        except Exception:
-            fusion_utils.log('自動配置フィーチャへの属性付与に失敗:\n' + traceback.format_exc())
+            removed = _delete_previous_features(arrange_features)
+            if removed:
+                notes.append(f'前回の自動配置フィーチャ {removed} 件を置き換えました。')
 
-        lines = [f'ソルバー: {_SOLVER_LABELS.get(solver_used, solver_used)}']
-        lines += _statistics_lines(feature)
-        lines += _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm)
-        lines += notes
+            feature, solver_used = _create_arrange(
+                root, arrange_features, occurrences, width_mm, depth_mm,
+                gap_mm, edge_mm, solver_mode, notes)
+            if feature is None:
+                ui.messageBox('整列フィーチャを作成できませんでした。\n'
+                              '詳細はテキストコマンドウィンドウ / %TEMP%\\fusioncam.log を確認してください。',
+                              '自動配置')
+                return
+
+            try:
+                feature.name = FEATURE_NAME
+            except Exception:
+                pass
+            try:
+                feature.attributes.add(ATTR_GROUP, ATTR_NAME, '1')
+            except Exception:
+                fusion_utils.log('自動配置フィーチャへの属性付与に失敗:\n' + traceback.format_exc())
+
+            lines = [f'ソルバー: {_SOLVER_LABELS.get(solver_used, solver_used)}']
+            lines += _statistics_lines(feature)
+            lines += _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm)
+            lines += notes
+        finally:
+            if previous_workspace is not None:
+                try:
+                    previous_workspace.activate()
+                    adsk.doEvents()
+                except Exception:
+                    fusion_utils.log('ワークスペースの復帰に失敗:\n' + traceback.format_exc())
         if solver_used == 'trueshape':
             lines.append('ℹ トゥルーシェイプ配置では「配置チェック」の間隔警告（bbox 目安）が'
                          '出ることがあります（実形状で 8mm 確保済みなら問題なし）')
