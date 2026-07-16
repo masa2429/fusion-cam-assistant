@@ -41,10 +41,10 @@ SAFE_LINKING_OVERRIDES = {
     'adaptive2d': [
         ('pockets_detectOpenPockets', ['false']),   # 開いたポケット扱い＝ストック外進入を禁止
         ('retractionPolicy', ["'full'", "'all'"]),  # 領域間は必ず退避高さへ
-        # helix 一本だとヘリカル径が入らない細い領域で垂直プランジに落ちる。
-        # 'smooth profile' は adaptive2d ではヘリカル併用可（allowHelicalRamps は
-        # predrill 以外 true）なので、細い場所だけ輪郭沿いランプになる
-        ('rampType', ["'smooth profile'", "'profile'"]),
+        # adaptive2d のランプはヘリカル系のみ（profile 系は受け付けない。実機確認済み）。
+        # 既定はヘリカル下限径=希望径(工具径×0.95)のため、細い領域で螺旋が成立せず
+        # 垂直プランジに落ちる。下限を工具径の1/4まで許容して細い場所でも螺旋を成立させる
+        ('minimumRampDiameter', ['tool_diameter * 0.25']),
     ],
     'pocket2d': [
         ('pockets_detectOpenPockets', ['false']),
