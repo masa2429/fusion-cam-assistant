@@ -126,10 +126,20 @@ ncProgram.postProcess(postOptions)
 | `retractionPolicy`（adaptive2d） | 'minimum' | 領域間を**下がったまま**リンク移動（stayDownDistance=5×工具径） | `'full'` |
 | `keepToolDown`（pocket2d） | true | 同上（stayDownDistance=50mm） | `false` |
 
-さらに adaptive2d は `rampType='helix'` のままだと**ヘリカル径が入らない細い領域で垂直プランジに
-フォールバックする**（実機確認 2026-07-16）。`rampType='smooth profile'` にすると adaptive2d では
-ヘリカル併用のまま（`allowHelicalRamps = rampType != 'predrill'`）細い場所だけ輪郭沿いランプになる。
-pocket2d は helix 指定時に輪郭ランプへのフォールバックが元から有効（`allowContourRamps`）。
+**adaptive2d の進入はヘリカル系のみ**（実機確認 2026-07-16）:
+- `rampType` に `'profile'` / `'smooth profile'` / `'zigzag'` を設定しようとすると**拒否される**
+- ヘリカルが幅的に成立しない領域（幅 < 工具径×1.25＋余裕）では**垂直プランジにフォールバック**する。
+  `minimumRampDiameter` 縮小・`entryPositions` 指定でも、幅が足りない面は救えない
+- → **対策は分類側**: ヘリカル不成立幅のポケット面は adaptive を使わず、輪郭パス
+  （contour2d・プロファイルランプ、幅≦2×工具径なら1パスで削り切れる）へ振替する（classifier.py）
+- `entryPositions`（CadObjectParameterValue、スケッチ点）で進入位置を指定できる。
+  ❗ **進入点スケッチはストック上面高さの平面に作ること**。Z=0（底面）の平面に作ると
+  点の Z が目標にされ「底まで降りてから横移動」する危険な経路になる（実機確認済み）
+- `allowPlunging`（bool）が存在する。false に上書きして明示的にプランジ禁止（保険）
+- `predrillPositions` + `rampType='predrill'` という下穴進入もテンプレXML内に存在（未実装・将来の正攻法候補）
+
+pocket2d は helix 指定時に輪郭ランプへのフォールバックが元から有効（`allowContourRamps`）なので
+この問題は起きない。
 
 アドインは操作生成後にこれらを上書きする（cam_builder.py `_apply_safe_linking`、config `force_safe_linking`）。
 

@@ -36,6 +36,8 @@ class PlanItem:
         self.loops = []             # contour系: ループごとの BRepEdge リスト
         self.faces = []             # pocket系: 底面 BRepFace リスト
         self.cylinders = []         # bore系: 穴/ざぐりの円筒側面 BRepFace リスト
+        # ポケット床を輪郭パスで加工する場合 True（ボトム高さを床ちょうどに補正する）
+        self.floor_contour = False
         # 加工サイド（True=反時計回り=内側）。外郭由来の取り残しでは False に上書きする
         self.side_ccw = kind != tr.KIND_GAIKAKU
         # ループごとの加工サイド上書き（面取りのように外側/内側ループが混在する場合）
@@ -357,10 +359,11 @@ def classify(design, registry, config):
         item.cylinders = [wall for _, wall in entries if wall is not None]
         items.append(item)
 
-    # 内郭ポケット
-    items += _group_faces_by_tool(registry, tr.KIND_POCKET, pocket_faces,
-                                  preferred.get(tr.KIND_POCKET, [5.0, 4.0, 3.0, 1.5]),
-                                  tool_margin)
+    # 内郭ポケット（負荷制御はヘリカル進入が成立する幅の面のみ。
+    # 成立しない細幅の面は輪郭パス（プロファイルランプ）へ自動振替する）
+    items += _group_pocket_faces(registry, pocket_faces,
+                                 preferred.get(tr.KIND_POCKET, [5.0, 4.0, 3.0, 1.5]),
+                                 tool_margin, result)
 
     # 穴あけ（径ごとに1操作）
     for diameter_mm in sorted(hole_groups):
@@ -469,17 +472,76 @@ def classify(design, registry, config):
     return result
 
 
-def _group_faces_by_tool(registry, kind, face_entries, preferred_diameters, margin_mm):
-    by_template = {}
+# cam_builder の minimumRampDiameter 上書き（工具径×0.25）と揃えること
+_HELIX_MIN_RATIO = 0.25
+
+
+def _pocket_template_feasible(template, opening_mm, margin_mm):
+    """その開口幅で安全に進入できるテンプレか（垂直プランジに落ちないか）。
+    adaptive2d はヘリカル進入のみなので「工具径＋最小ヘリカル径」の幅が必要。"""
+    if opening_mm is None or template.tool_diameter_mm is None:
+        return True
+    need = template.tool_diameter_mm + margin_mm
+    if (template.strategy or '').lower() == 'adaptive2d':
+        need = template.tool_diameter_mm * (1.0 + _HELIX_MIN_RATIO) + margin_mm
+    return opening_mm >= need
+
+
+def _group_pocket_faces(registry, face_entries, preferred_diameters, margin_mm, result):
+    """ポケット面をテンプレに割り当てる。進入が成立しないテンプレは選ばず、
+    どのポケット系テンプレでも成立しない細幅の面は、輪郭パス（プロファイルランプ、
+    幅≦2×工具径なら1パスで削り切れる）へ振り替える。"""
+    def sort_key(template):
+        set_rank = 0 if template.set_name == registry.preferred_set else 1
+        diameter = template.tool_diameter_mm or 0
+        try:
+            pref_rank = preferred_diameters.index(diameter)
+        except ValueError:
+            pref_rank = len(preferred_diameters)
+        return (set_rank, pref_rank, -diameter)
+
+    pocket_by_template = {}
+    contour_by_template = {}
     for face, opening_mm in face_entries:
-        template = registry.pick(kind, opening_mm, preferred_diameters, margin_mm)
-        if template is None:
+        candidates = [t for t in registry.find(tr.KIND_POCKET)
+                      if _pocket_template_feasible(t, opening_mm, margin_mm)]
+        if candidates:
+            template = sorted(candidates, key=sort_key)[0]
+            pocket_by_template.setdefault(template.name, []).append(face)
             continue
-        by_template.setdefault(template.name, []).append(face)
+        # 細幅: 輪郭テンプレ（contour2d・プロファイルランプ）で床の輪郭を1パス加工
+        contour_template = None
+        for t in sorted(registry.find(tr.KIND_NAIKAKU), key=sort_key):
+            diameter = t.tool_diameter_mm or 0
+            if opening_mm is not None and \
+                    opening_mm >= diameter + margin_mm and opening_mm <= diameter * 2:
+                contour_template = t
+                break
+        if contour_template is not None:
+            contour_by_template.setdefault(contour_template.name, []).append(face)
+        else:
+            width_text = f'{opening_mm:.1f}mm' if opening_mm is not None else '不明'
+            result.warnings.append(
+                f'幅 {width_text} のポケット面に安全に進入できる工具がありません（未割り当て）。')
+
     items = []
-    for name, faces in by_template.items():
+    for name, faces in pocket_by_template.items():
         template = registry.by_name(name)
-        item = PlanItem(kind, f'{kind} ×{len(faces)}（Φ{template.tool_diameter_mm:g}）', template)
+        item = PlanItem(tr.KIND_POCKET,
+                        f'内郭ポケット ×{len(faces)}（Φ{template.tool_diameter_mm:g}）', template)
         item.faces = faces
         items.append(item)
+    for name, faces in contour_by_template.items():
+        template = registry.by_name(name)
+        item = PlanItem(tr.KIND_POCKET,
+                        f'内郭ポケット ×{len(faces)}（Φ{template.tool_diameter_mm:g} 輪郭パス）',
+                        template,
+                        note='細幅のため輪郭パスで加工（負荷制御はヘリカル進入が成立しない）')
+        for face in faces:
+            outer = next((lp for lp in face.loops if lp.isOuter), None)
+            if outer is not None:
+                item.loops.append(list(outer.edges))
+        item.floor_contour = True
+        if item.loops:
+            items.append(item)
     return items

@@ -41,14 +41,16 @@ SAFE_LINKING_OVERRIDES = {
     'adaptive2d': [
         ('pockets_detectOpenPockets', ['false']),   # 開いたポケット扱い＝ストック外進入を禁止
         ('retractionPolicy', ["'full'", "'all'"]),  # 領域間は必ず退避高さへ
-        # adaptive2d のランプはヘリカル系のみ（profile 系は受け付けない。実機確認済み）。
-        # 既定はヘリカル下限径=希望径(工具径×0.95)のため、細い領域で螺旋が成立せず
-        # 垂直プランジに落ちる。下限を工具径の1/4まで許容して細い場所でも螺旋を成立させる
+        # adaptive2d のランプは helix 系のみ（profile/zigzag は拒否される。実機確認済み）。
+        # ヘリカル下限径を絞り、進入点（entryPositions）と併用して細い領域でも成立させる。
+        # ※ヘリカルが成立しない細幅の面は classifier 側で輪郭パスへ振替される
         ('minimumRampDiameter', ['tool_diameter * 0.25']),
+        ('allowPlunging', ['false']),               # 垂直プランジの明示禁止
     ],
     'pocket2d': [
         ('pockets_detectOpenPockets', ['false']),
         ('keepToolDown', ['false']),                # 下がったままの移動を禁止
+        ('allowPlunging', ['false']),
         # rampType は 'helix' のまま（pocket2d は helix 指定時に輪郭ランプへの
         # フォールバックが有効: allowContourRamps）
     ],
@@ -98,6 +100,9 @@ def build(cam, classify_result, plan_items, config):
             if config.get('force_safe_linking', True):
                 _apply_safe_linking(operation, item)
                 _apply_entry_positions(operation, entry_points_map.get(id(item)))
+            if getattr(item, 'floor_contour', False):
+                # ポケット床の輪郭パス: 貫通用テンプレの「輪郭から-0.1mm」を床ちょうどに補正
+                _try_set(operation.parameters, 'bottomHeight_offset', '0 mm', None)
             operation.name = f'{sequence:02d}_{item.template.name}'
             report.created.append((operation.name, item.selection_count))
             created_operations.append(operation)
@@ -331,8 +336,8 @@ def _interior_point(face):
     """面上で境界から最も遠い点（ヘリカル進入に最適な場所）をサンプリングで求める。"""
     try:
         evaluator = face.evaluator
-        ok, parametric_range = evaluator.parametricRange()
-        if not ok:
+        parametric_range = evaluator.parametricRange()  # BoundingBox2D を直接返す
+        if parametric_range is None:
             return None
         boundary = _face_boundary_points(face)
         if not boundary:
