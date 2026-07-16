@@ -33,6 +33,7 @@ _XML_NS = '{http://www.hsmworks.com/namespace/hsmworks/document/template}'
 # DLC テンプレの既定マッピング（config.json の dlc_name_rules で上書き可能）。
 # 上から順に最初に一致したルールを使う。kind が None のものは登録のみ（自動割当外）。
 DEFAULT_DLC_NAME_RULES = [
+    {'pattern': '穴1.5', 'kind': KIND_HOLE, 'target_diameter_mm': 2.0},
     {'pattern': 'ボア1 M3', 'kind': KIND_HOLE, 'target_diameter_mm': 2.5},
     {'pattern': 'ボア1 Φ3', 'kind': KIND_HOLE, 'target_diameter_mm': 3.0},
     {'pattern': 'ボア2 Φ4', 'kind': KIND_ZAGURI, 'target_diameter_mm': 4.0},
