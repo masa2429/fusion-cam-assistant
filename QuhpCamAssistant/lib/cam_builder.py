@@ -79,7 +79,10 @@ def build(cam, classify_result, plan_items, config):
     return report
 
 
-SETUP_NAME = 'QUHP 自動セットアップ'
+SETUP_NAME = '自動CAM'
+# 旧名（v0.1 初期）も置き換え・NC出力の対象にして、過去に生成したセットアップとの互換を保つ
+LEGACY_SETUP_NAMES = ('QUHP 自動セットアップ',)
+SETUP_NAME_PREFIXES = (SETUP_NAME,) + LEGACY_SETUP_NAMES
 
 
 def _create_setup(cam, classify_result, config, report):
@@ -88,7 +91,7 @@ def _create_setup(cam, classify_result, config, report):
     for i in reversed(range(cam.setups.count)):
         existing = cam.setups.item(i)
         try:
-            if existing.name.startswith(SETUP_NAME):
+            if existing.name.startswith(SETUP_NAME_PREFIXES):
                 existing.deleteMe()
                 removed += 1
         except Exception:

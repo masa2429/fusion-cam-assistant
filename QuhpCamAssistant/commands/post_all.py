@@ -107,10 +107,10 @@ def _on_created(args):
             ui.messageBox('セットアップがありません。先に切削データを作成してください。')
             return
 
-        # QUHP 自動セットアップがあればそれだけを対象、無ければ全セットアップを対象にする
+        # 自動CAMセットアップがあればそれだけを対象、無ければ全セットアップを対象にする
         all_setups = [cam.setups.item(i) for i in range(cam.setups.count)]
         target_setups = [s for s in all_setups
-                         if s.name.startswith(cam_builder.SETUP_NAME)]
+                         if s.name.startswith(cam_builder.SETUP_NAME_PREFIXES)]
         if not target_setups:
             target_setups = all_setups
         operations = []
