@@ -9,8 +9,10 @@ import hashlib
 import os
 import shutil
 import tempfile
+import time
 import traceback
 
+import adsk
 import adsk.cam
 import adsk.core
 
@@ -57,6 +59,7 @@ def build(cam, classify_result, plan_items, config):
     setup = _create_setup(cam, classify_result, config, report)
 
     sequence = 0
+    created_operations = []
     for item in plan_items:
         if not item.enabled or item.template is None or item.selection_count == 0:
             continue
@@ -66,17 +69,48 @@ def build(cam, classify_result, plan_items, config):
             _assign_geometry(operation, item)
             operation.name = f'{sequence:02d}_{item.template.name}'
             report.created.append((operation.name, item.selection_count))
+            created_operations.append(operation)
         except Exception:
             report.failed.append((item.label, traceback.format_exc(limit=3)))
             fusion_utils.log(f'操作生成失敗 {item.label}:\n{traceback.format_exc()}')
 
     if report.created:
         try:
-            cam.generateAllToolpaths(True)
-            report.notes.append('ツールパスを生成中です（完了までしばらくかかります）。')
+            future = cam.generateAllToolpaths(True)
+            if _wait_for_generation(future, timeout_seconds=120):
+                _delete_empty_operations(created_operations, report)
+            else:
+                report.notes.append('ツールパスを生成中です（完了までしばらくかかります）。'
+                                    '空のツールパスが残った場合は手動で削除してください。')
         except Exception:
             report.notes.append('ツールパスの自動生成に失敗。手動で「生成」してください。')
     return report
+
+
+def _wait_for_generation(future, timeout_seconds):
+    """ツールパス生成の完了を UI を固めずに待つ。タイムアウトで False。"""
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while not future.isGenerationCompleted:
+            if time.monotonic() > deadline:
+                return False
+            adsk.doEvents()
+            time.sleep(0.1)
+        return True
+    except Exception:
+        return False
+
+
+def _delete_empty_operations(operations, report):
+    """空のツールパス（No passes to link 等）になった操作を削除する。"""
+    for operation in operations:
+        try:
+            if not operation.hasToolpath:
+                name = operation.name
+                operation.deleteMe()
+                report.notes.append(f'空のツールパスだったため削除: {name}')
+        except Exception:
+            fusion_utils.log('空ツールパス削除に失敗:\n' + traceback.format_exc())
 
 
 SETUP_NAME = '自動CAM'
