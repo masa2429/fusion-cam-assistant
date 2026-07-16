@@ -84,7 +84,7 @@ def build(cam, classify_result, plan_items, config):
     """確認済みの PlanItem 群からセットアップと操作を一括生成する。"""
     report = BuildReport()
     setup = _create_setup(cam, classify_result, config, report)
-    entry_points_map = _prepare_entry_positions(plan_items)
+    entry_points_map = _prepare_entry_positions(plan_items, classify_result)
 
     sequence = 0
     created_operations = []
@@ -362,10 +362,15 @@ def _interior_point(face):
         return None
 
 
-def _prepare_entry_positions(items):
+ENTRY_PLANE_NAME = '自動CAM_進入点平面'
+
+
+def _prepare_entry_positions(items, classify_result):
     """負荷制御（adaptive2d）の各ポケット面に対し、境界から最も遠い内部点の
     進入点スケッチを作る。Fusion 任せだと端の細い場所で垂直プランジに落ちるため、
-    ヘリカルが確実に成立する場所から進入させる。"""
+    ヘリカルが確実に成立する場所から進入させる。
+    ※スケッチは必ず「ストック上面の高さ」の平面に作ること。Z=0（底面）の平面に
+    作ると進入点の Z が目標にされ、底の深さまで降りてから横移動する危険な動きになる。"""
     adaptive_items = [
         item for item in items
         if item.enabled and item.template is not None and item.faces
@@ -378,9 +383,30 @@ def _prepare_entry_positions(items):
         sketch = root.sketches.item(i)
         if sketch.name == ENTRY_SKETCH_NAME:
             sketch.deleteMe()
+    for i in reversed(range(root.constructionPlanes.count)):
+        plane = root.constructionPlanes.item(i)
+        if plane.name == ENTRY_PLANE_NAME:
+            plane.deleteMe()
     if not adaptive_items:
         return {}
-    sketch = root.sketches.add(root.xYConstructionPlane)
+
+    top_z = max((body.boundingBox.maxPoint.z for body in classify_result.bodies),
+                default=0.0)
+    sketch_plane = root.xYConstructionPlane
+    if abs(top_z) > 1e-6:
+        try:
+            plane_input = root.constructionPlanes.createInput()
+            plane_input.setByOffset(root.xYConstructionPlane,
+                                    adsk.core.ValueInput.createByReal(top_z))
+            plane = root.constructionPlanes.add(plane_input)
+            plane.name = ENTRY_PLANE_NAME
+            plane.isLightBulbOn = False
+            sketch_plane = plane
+        except Exception:
+            fusion_utils.log('進入点平面の作成に失敗（XY平面を使用）:\n'
+                             + traceback.format_exc())
+
+    sketch = root.sketches.add(sketch_plane)
     sketch.name = ENTRY_SKETCH_NAME
     points_by_item = {}
     for item in adaptive_items:
@@ -391,7 +417,7 @@ def _prepare_entry_positions(items):
                 fusion_utils.log(f'{item.label}: 進入点を計算できない面があります')
                 continue
             local = sketch.modelToSketchSpace(
-                adsk.core.Point3D.create(world.x, world.y, 0))
+                adsk.core.Point3D.create(world.x, world.y, top_z))
             sketch_points.append(sketch.sketchPoints.add(local))
         if sketch_points:
             points_by_item[id(item)] = sketch_points
