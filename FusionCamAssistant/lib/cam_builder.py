@@ -542,6 +542,58 @@ def _offset_line_intersection(entry_a, entry_b):
     return (p1[0] + u1[0] * t, p1[1] + u1[1] * t)
 
 
+def _inner_loop_is_boss(face, loop, z_cm):
+    """床面の内側ループが「島（床より上に立つ凸）」か「穴（床より下）」かを判別。
+    判別できない場合は島扱い（残す＝安全側）。"""
+    try:
+        edge = loop.edges.item(0)
+        for adjacent in edge.faces:
+            if adjacent != face:
+                return adjacent.boundingBox.maxPoint.z > z_cm + 0.005
+    except Exception:
+        pass
+    return True
+
+
+def _configure_sketch_selection(selection, has_islands, label):
+    """スケッチ境界選択のループ/サイドを設定する。
+    - サイド「内側から開始」: 設定しないとスケッチの外側にパスが生成される（実機報告）
+    - ループ: 島があるときは全ループ（島を残す）、無ければ外側のみ
+      （床の穴ループを境界にすると穴の周囲に取り残しが出るため）"""
+    loop_candidates = ('AllLoops',) if has_islands else ('OnlyOutsideLoops', 'OutsideLoops')
+    loop_set = False
+    for name in loop_candidates:
+        value = getattr(adsk.cam.LoopTypes, name, None)
+        if value is None:
+            continue
+        try:
+            selection.loopTypes = value
+            loop_set = True
+            break
+        except Exception:
+            continue
+    if not loop_set:
+        fusion_utils.log(f'{label}: スケッチ選択のループ設定に失敗'
+                         '（ダイアログで「外側のループ」を手動設定してください）')
+    side_set = False
+    for name in ('StartInsideSideType', 'AlwaysInsideSideType', 'InsideSideType'):
+        value = getattr(adsk.cam.SideTypes, name, None)
+        if value is None:
+            continue
+        for attribute in ('sideType', 'sideTypes'):
+            try:
+                setattr(selection, attribute, value)
+                side_set = True
+                break
+            except Exception:
+                continue
+        if side_set:
+            break
+    if not side_set:
+        fusion_utils.log(f'{label}: スケッチ選択のサイド設定に失敗'
+                         '（ダイアログで「内側から開始」を手動設定してください）')
+
+
 def _build_extended_boundary_sketch(face, open_edges, margin_cm):
     """開口辺をストック余白側へ margin_cm 平行移動した「閉じた」境界スケッチを作る。
     - 閉じた辺・島はエッジをそのまま投影（形状は正確に維持）
@@ -572,11 +624,16 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
                 q = sketch.modelToSketchSpace(adsk.core.Point3D.create(x2, y2, z_cm))
                 lines.addByTwoPoints(p, q)
 
+    has_islands = False
     try:
         for loop in face.loops:
             if not loop.isOuter:
-                for edge in loop.edges:
-                    sketch.project(edge)  # 島はそのまま
+                # 島（凸）だけ投影して残す。穴ループは含めない
+                # （境界にすると穴の周囲に取り残しが出るため。穴は後工程で加工される）
+                if _inner_loop_is_boss(face, loop, z_cm):
+                    has_islands = True
+                    for edge in loop.edges:
+                        sketch.project(edge)
                 continue
             entries = _ordered_coedge_entries(loop, outward_by_edge, margin_cm)
             count = len(entries)
@@ -632,7 +689,7 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
         sketch.isLightBulbOn = False
     except Exception:
         pass
-    return sketch
+    return sketch, has_islands
 
 
 def _assign_bore_faces(operation, item):
@@ -678,10 +735,12 @@ def _assign_pockets(operation, item, config):
         for face in item.faces:
             open_edges = open_map.get(face.tempId)
             if open_edges:
-                sketch = _build_extended_boundary_sketch(face, open_edges, margin_cm)
-                if sketch is not None:
+                built = _build_extended_boundary_sketch(face, open_edges, margin_cm)
+                if built is not None:
+                    sketch, has_islands = built
                     sketch_selection = selections.createNewSketchSelection()
                     sketch_selection.inputGeometry = [sketch]
+                    _configure_sketch_selection(sketch_selection, has_islands, item.label)
                     continue
                 fusion_utils.log(f'{item.label}: 境界拡張に失敗（面選択にフォールバック）')
             plain_faces.append(face)
