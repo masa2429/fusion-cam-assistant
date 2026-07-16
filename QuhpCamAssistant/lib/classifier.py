@@ -34,6 +34,8 @@ class PlanItem:
         self.enabled = template is not None
         self.loops = []             # contour系: ループごとの BRepEdge リスト
         self.faces = []             # pocket系: 底面 BRepFace リスト
+        # 加工サイド（True=反時計回り=内側）。外郭由来の取り残しでは False に上書きする
+        self.side_ccw = kind != tr.KIND_GAIKAKU
 
     @property
     def selection_count(self):
@@ -159,37 +161,70 @@ def _loop_bbox_min_dimension_mm(loop):
     return min(width, depth)
 
 
-def _min_feature_radius_mm(loop):
-    """ループ中の最小の凹み特徴半径（mm）。尖った隅（非接線頂点）は 0 とみなす。
-    工具半径より小さい特徴があると削り残しが出る。判定失敗時は None。"""
+def _concave_feature_radius_mm(loop, machining_ccw):
+    """加工方向（+Z視点で 内郭=反時計回り・外郭=時計回り）でループをたどったとき、
+    工具側へ凹む特徴の最小半径（mm）を返す。
+    左曲がりの尖った頂点 = 0、左曲がりの円弧 = その半径。凸側（右曲がり）は
+    工具が回り込めるので無視する。凹み特徴が無ければ math.inf、判定失敗は None。"""
     try:
-        min_radius = math.inf
-        tangents = []
-        coedges = loop.coEdges
-        n = coedges.count
-        for i in range(n):
-            coedge = coedges.item(i)
+        coedges = list(loop.coEdges)
+        if not coedges:
+            return None
+        tangents = []   # コエッジ順トラバース方向の (始点接線, 終点接線)
+        arc_infos = []  # (半径mm, トラバース方向で中心が左なら正の外積)
+        points = []
+        for coedge in coedges:
             edge = coedge.edge
-            geometry = edge.geometry
-            if geometry.curveType == adsk.core.Curve3DTypes.Circle3DCurveType or \
-                    geometry.curveType == adsk.core.Curve3DTypes.Arc3DCurveType:
-                min_radius = min(min_radius, geometry.radius * 10.0)
             evaluator = edge.evaluator
             ok, t_start, t_end = evaluator.getParameterExtents()
-            ok1, tan_start = evaluator.getTangent(t_start)
-            ok2, tan_end = evaluator.getTangent(t_end)
-            if not (ok and ok1 and ok2):
+            ok2, stroke = evaluator.getStrokes(t_start, t_end, 0.01)
+            ok3, tan_start = evaluator.getTangent(t_start)
+            ok4, tan_end = evaluator.getTangent(t_end)
+            if not (ok and ok2 and ok3 and ok4) or len(stroke) < 2:
                 return None
+            sequence = list(stroke)
             if coedge.isOpposedToEdge:
+                sequence.reverse()
                 tan_start, tan_end = tan_end.copy(), tan_start.copy()
                 tan_start.scaleBy(-1.0)
                 tan_end.scaleBy(-1.0)
+            points.extend(sequence[:-1])
             tangents.append((tan_start, tan_end))
-        for i in range(n):
+            geometry = edge.geometry
+            if geometry.curveType in (adsk.core.Curve3DTypes.Circle3DCurveType,
+                                      adsk.core.Curve3DTypes.Arc3DCurveType):
+                mid_index = len(sequence) // 2
+                before = sequence[max(0, mid_index - 1)]
+                after = sequence[min(len(sequence) - 1, mid_index + 1)]
+                mid = sequence[mid_index]
+                center = geometry.center
+                cross = ((after.x - before.x) * (center.y - mid.y)
+                         - (after.y - before.y) * (center.x - mid.x))
+                arc_infos.append((geometry.radius * 10.0, cross))
+        if len(points) < 3:
+            return None
+        # 現在のトラバース方向を符号付き面積で判定し、加工方向に合わせて符号を反転
+        area2 = 0.0
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            area2 += p1.x * p2.y - p2.x * p1.y
+        if abs(area2) < 1e-12:
+            return None
+        flip = 1.0 if (area2 > 0) == machining_ccw else -1.0
+
+        min_radius = math.inf
+        count = len(tangents)
+        for i in range(count):
             outgoing = tangents[i][1]
-            incoming = tangents[(i + 1) % n][0]
+            incoming = tangents[(i + 1) % count][0]
             if outgoing.angleTo(incoming) > _TANGENT_TOL_RAD:
-                min_radius = 0.0
+                cross = (outgoing.x * incoming.y - outgoing.y * incoming.x) * flip
+                if cross > 0:  # 左曲がり = 工具側に凹む尖った隅
+                    min_radius = 0.0
+        for radius_mm, cross in arc_infos:
+            if cross * flip > 0:  # 中心が工具側 = 凹円弧
+                min_radius = min(min_radius, radius_mm)
         return min_radius
     except Exception:
         return None
@@ -239,7 +274,8 @@ def classify(design, registry, config):
 
         for loop in bottom.loops:
             if loop.isOuter:
-                outer_loops.append(list(loop.edges))
+                outer_loops.append((list(loop.edges),
+                                    _concave_feature_radius_mm(loop, machining_ccw=False)))
                 continue
             circle = _is_full_circle_loop(loop)
             if circle is not None:
@@ -252,11 +288,11 @@ def classify(design, registry, config):
                     unassigned_circles[key] = unassigned_circles.get(key, 0) + 1
                 else:
                     naikaku_loops.append((list(loop.edges), diameter_mm,
-                                          _min_feature_radius_mm(loop)))
+                                          _concave_feature_radius_mm(loop, machining_ccw=True)))
             else:
                 naikaku_loops.append((list(loop.edges),
                                       _opening_estimate_mm(loop),
-                                      _min_feature_radius_mm(loop)))
+                                      _concave_feature_radius_mm(loop, machining_ccw=True)))
 
         # 中間高さの上向き平面 = ポケット/ざぐりの底
         for face, z, is_up in faces:
@@ -325,20 +361,37 @@ def classify(design, registry, config):
         rest_template = registry.pick(tr.KIND_TORINOKOSHI, None, [1.5], tool_margin)
         if rest_template is not None:
             item = PlanItem(tr.KIND_TORINOKOSHI,
-                            f'取り残し加工 ×{len(rest_loops)}（Φ{rest_template.tool_diameter_mm:g}）',
+                            f'取り残し加工（内郭） ×{len(rest_loops)}'
+                            f'（Φ{rest_template.tool_diameter_mm:g}）',
                             rest_template,
                             note='Φ3で削り残る隅を検出（要確認）')
             item.loops = rest_loops
             items.append(item)
 
-    # 外郭（最後）
+    # 外郭（最後）＋ 外郭の凹隅の取り残し提案
     if outer_loops:
         template = registry.pick(tr.KIND_GAIKAKU, None,
                                  preferred.get(tr.KIND_GAIKAKU, [3.0, 2.0]), tool_margin)
         item = PlanItem(tr.KIND_GAIKAKU, f'外郭 ×{len(outer_loops)}', template,
                         note='パーツ間隔が狭い場合は Φ2.0 に変更')
-        item.loops = outer_loops
+        item.loops = [edges for edges, _ in outer_loops]
         items.append(item)
+        if template is not None and template.tool_diameter_mm > 1.5:
+            tool_radius = template.tool_diameter_mm / 2.0
+            outer_rest = [edges for edges, feature in outer_loops
+                          if feature is not None and feature < tool_radius - 0.01]
+            if outer_rest:
+                rest_template = registry.pick(tr.KIND_TORINOKOSHI, None, [1.5], tool_margin)
+                if rest_template is not None:
+                    rest_item = PlanItem(
+                        tr.KIND_TORINOKOSHI,
+                        f'取り残し加工（外郭） ×{len(outer_rest)}'
+                        f'（Φ{rest_template.tool_diameter_mm:g}）',
+                        rest_template,
+                        note='外郭の凹んだ隅を検出。外郭の切り離しより先に加工される')
+                    rest_item.loops = outer_rest
+                    rest_item.side_ccw = False  # 外郭と同じく輪郭の外側を削る
+                    items.append(rest_item)
 
     # 未割り当ての円（ボール盤穴）: 情報行として最後に出す
     for diameter_mm in sorted(unassigned_circles):

@@ -245,7 +245,7 @@ def _assign_geometry(operation, item):
         # 加工サイドはチェーンの周回方向で決まる（テンプレは左補正）。
         # エッジ列から作るチェーンの向きはボディ依存で不定のため、符号付き面積で
         # 現在の向きを求め、外郭=時計回り（外側）・内郭/穴=反時計回り（内側）に揃える。
-        desired_ccw = (item.kind != tr.KIND_GAIKAKU)
+        desired_ccw = getattr(item, 'side_ccw', item.kind != tr.KIND_GAIKAKU)
         reverted_count = 0
         for loop_edges in item.loops:
             chain = selections.createNewChainSelection()
