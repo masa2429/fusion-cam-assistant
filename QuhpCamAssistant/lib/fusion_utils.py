@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 import traceback
 
 import adsk.cam
@@ -33,8 +34,20 @@ def ui():
     return app().userInterface
 
 
+LOG_FILE = os.path.join(tempfile.gettempdir(), 'quhpcam.log')
+
+
 def log(message):
-    app().log('[QuhpCam] {}'.format(message))
+    text = '[QuhpCam] {}'.format(message)
+    try:
+        app().log(text)
+    except Exception:
+        pass
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(text + '\n')
+    except OSError:
+        pass
 
 
 def cm_to_mm(value_cm):
