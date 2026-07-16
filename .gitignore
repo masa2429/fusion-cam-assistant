@@ -11,3 +11,5 @@ tools/output/
 dump*.txt
 *.nc
 *.cnc
+# 部内限定資料（公開リポジトリに含めない）
+docs/internal/
