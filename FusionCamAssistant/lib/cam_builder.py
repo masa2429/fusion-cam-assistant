@@ -723,8 +723,6 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
         return None
     sketch.name = f'{BOUNDARY_SKETCH_PREFIX}{_boundary_sketch_counter}'
     open_edge_ids = {edge.tempId for edge, _ in open_edges}
-    # 診断: 壁法線（旧方式）と周回方向由来の外向きの食い違いをログに残す
-    normal_by_edge = {edge.tempId: normal for edge, normal in open_edges}
     lines = sketch.sketchCurves.sketchLines
 
     def add_polyline(points_xy):
@@ -749,19 +747,6 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
             count = len(entries)
             if count == 0:
                 continue
-            # 診断ログ: 壁法線（evaluator 由来）と周回方向由来の外向きの比較
-            for edge, is_open, start, end, offset in entries:
-                if not is_open:
-                    continue
-                normal = normal_by_edge.get(edge.tempId)
-                if normal is None:
-                    continue
-                dot = normal.x * offset[0] + normal.y * offset[1]
-                if dot < 0:
-                    fusion_utils.log(
-                        f'[境界デバッグ] 壁法線と周回方向の外向きが不一致: '
-                        f'辺({start[0]:.2f},{start[1]:.2f})→({end[0]:.2f},{end[1]:.2f}) '
-                        f'法線=({normal.x:.2f},{normal.y:.2f}) 採用オフセット=({offset[0]:.2f},{offset[1]:.2f})')
             has_open = any(e[1] for e in entries)
             if not has_open:
                 for edge, *_ in entries:
