@@ -58,6 +58,17 @@ def mm_to_cm(value_mm):
     return value_mm / MM_PER_CM
 
 
+def proxy_world_transform(entity):
+    """プロキシ（オカレンス文脈の BRep）をルート座標系へ直す変換。ネイティブなら None。
+    ❗ プロキシの evaluator（法線・点・ストローク）はコンポーネントローカル座標の値を
+    返すことがある（回転配置の部品で実機確認）。位置や方向をワールド座標で使うときは、
+    nativeObject の evaluator で評価してからこの変換を明示的に適用すること。"""
+    context = getattr(entity, 'assemblyContext', None)
+    if context is None:
+        return None
+    return getattr(context, 'transform2', None) or context.transform
+
+
 LOCAL_CONFIG_PATH = os.path.join(ADDIN_DIR, 'config.local.json')
 
 

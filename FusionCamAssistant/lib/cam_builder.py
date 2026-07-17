@@ -409,8 +409,14 @@ def _face_boundary_points(face):
 
 
 def _interior_point(face):
-    """面上で境界から最も遠い点（ヘリカル進入に最適な場所）をサンプリングで求める。"""
+    """面上で境界から最も遠い点（ヘリカル進入に最適な場所）をサンプリングで求める。
+    プロキシ面の evaluator はローカル座標を返すことがあるため、ネイティブ面で
+    計算して最後にオカレンス変換でワールドへ直す（境界点も同じネイティブ空間で
+    取るので距離計算は整合する）。"""
     try:
+        transform = fusion_utils.proxy_world_transform(face)
+        if transform is not None:
+            face = face.nativeObject
         evaluator = face.evaluator
         parametric_range = evaluator.parametricRange()  # BoundingBox2D を直接返す
         if parametric_range is None:
@@ -438,6 +444,8 @@ def _interior_point(face):
                 if distance > best_distance:
                     best_distance = distance
                     best_point = world
+        if best_point is not None and transform is not None:
+            best_point.transformBy(transform)  # ネイティブ → ワールド
         return best_point
     except Exception:
         return None
@@ -682,7 +690,7 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
     root = design.rootComponent
     _boundary_sketch_counter += 1
     try:
-        z_cm = face.pointOnFace.z
+        z_cm = face.boundingBox.minPoint.z  # bbox はプロキシでも確実にワールド座標
         plane = _boundary_sketch_plane(root, z_cm)
         sketch = root.sketches.add(plane)
     except Exception:

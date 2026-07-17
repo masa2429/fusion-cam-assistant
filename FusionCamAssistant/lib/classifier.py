@@ -77,8 +77,17 @@ def collect_bodies(design):
 
 
 def _outward_normal(face):
-    ok, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
-    return normal if ok else None
+    """面の外向き法線（ワールド座標）。プロキシ面はネイティブ面で評価してから
+    オカレンス変換で明示的にワールドへ直す（fusion_utils.proxy_world_transform 参照。
+    回転配置の部品で境界拡張が内側を向く不具合の原因だった）。"""
+    transform = fusion_utils.proxy_world_transform(face)
+    native = face.nativeObject if transform is not None else face
+    ok, normal = native.evaluator.getNormalAtPoint(native.pointOnFace)
+    if not ok:
+        return None
+    if transform is not None:
+        normal.transformBy(transform)  # Vector3D には回転成分のみ適用される
+    return normal
 
 
 def _horizontal_planar_faces(body):
