@@ -78,30 +78,14 @@ def _unit_bodies(occurrence):
     return bodies
 
 
-def _top_face(occurrence):
-    """配置単位の「上面」（+Z 向きの最大平面。単位の最高高さにあるもの）を返す。
-    オカレンスを整列に渡すと「最大の面が下向き」に向け直され、平板（上下同面積）は
-    上下反転する（実機確認済み）。上面を渡して isGlobalDirectionFaceUp と組み合わせる
-    ことで向きを固定する。見つからなければ None。"""
-    best = None
-    best_area = 0.0
-    for body in _unit_bodies(occurrence):
-        try:
-            top_z = body.boundingBox.maxPoint.z
-            for face in body.faces:
-                if face.geometry.objectType != adsk.core.Plane.classType():
-                    continue
-                success, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
-                if not success or normal.z < 0.99:
-                    continue
-                if face.boundingBox.maxPoint.z < top_z - 0.005:  # cm: 上面高さ以外は除外
-                    continue
-                if face.area > best_area:
-                    best = face
-                    best_area = face.area
-        except Exception:
-            continue
-    return best
+def _is_flipped(occurrence):
+    """オカレンスの変換行列の Z 軸成分から上下反転を判定する（Z軸回転のみなら zz≈+1）。
+    判定できない場合は None。"""
+    try:
+        transform = getattr(occurrence, 'transform2', None) or occurrence.transform
+        return transform.getCell(2, 2) < 0.0
+    except Exception:
+        return None
 
 
 def _collect_targets(root):
@@ -153,18 +137,6 @@ def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
         order = [('trueshape', adsk.fusion.ArrangeSolverTypes.Arrange2DTrueShapeSolverType),
                  ('rectangular', adsk.fusion.ArrangeSolverTypes.Arrange2DRectangularSolverType)]
 
-    # 上下反転防止: オカレンスではなく各部品の上面を渡す（api-notes.md 7 参照）
-    targets = []
-    faceless = []
-    for occurrence in occurrences:
-        face = _top_face(occurrence)
-        targets.append((occurrence, face))
-        if face is None:
-            faceless.append(occurrence.name)
-    if faceless:
-        notes.append('⚠ 上面を特定できなかった部品（上下の向きが保証されません。'
-                     '結果を目視確認）: ' + ', '.join(faceless))
-
     for solver_name, solver_type in order:
         try:
             arrange_input = arrange_features.createInput(solver_type)
@@ -199,13 +171,16 @@ def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
                     adsk.fusion.ArrangeRotationTypes.AllRotationsArrangeRotationType
             except Exception:
                 fusion_utils.log('globalRotation を設定できませんでした')
-            try:
-                definition.isGlobalDirectionFaceUp = True  # 渡した上面を上に向ける
-            except Exception:
-                fusion_utils.log('isGlobalDirectionFaceUp を設定できませんでした')
-
-            for occurrence, face in targets:
-                arrange_input.arrangeComponents.add(face if face is not None else occurrence)
+            # 上下反転防止: オカレンス渡しの既定の向きは平板を裏返す（実機確認済み）。
+            # BRepFace 渡しは InternalValidationError で使えなかったため、
+            # isDirectionFlipped で既定の向きから反転させて打ち消す。
+            # 実際に正しい向きになったかは配置後に変換行列で検証・表示する。
+            for occurrence in occurrences:
+                component = arrange_input.arrangeComponents.add(occurrence)
+                try:
+                    component.isDirectionFlipped = True
+                except Exception:
+                    fusion_utils.log(f'isDirectionFlipped を設定できませんでした: {occurrence.name}')
 
             feature = arrange_features.add(arrange_input)
             return feature, solver_name
@@ -251,6 +226,28 @@ def _statistics_lines(feature):
                 lines.append('    未配置: ' + ', '.join(names))
         except Exception:
             pass
+    return lines
+
+
+def _flip_check_lines(occurrences):
+    """配置後の上下反転チェック。反転部品があれば鏡像加工事故になるため明示する。"""
+    flipped = []
+    unknown = []
+    for occurrence in occurrences:
+        result = _is_flipped(occurrence)
+        if result is True:
+            flipped.append(occurrence.name)
+        elif result is None:
+            unknown.append(occurrence.name)
+    lines = []
+    if flipped:
+        lines.append('✗ 上下が反転している部品（このまま削ると鏡像になります！）: '
+                     + ', '.join(flipped))
+        lines.append('    ※Ctrl+Z で戻し、開発者に報告してください')
+    elif not unknown:
+        lines.append('✓ 上下の向き: 全部品正常')
+    if unknown:
+        lines.append('⚠ 上下の向きを判定できなかった部品（目視確認）: ' + ', '.join(unknown))
     return lines
 
 
@@ -373,6 +370,7 @@ def _on_created(args):
 
             lines = [f'ソルバー: {_SOLVER_LABELS.get(solver_used, solver_used)}']
             lines += _statistics_lines(feature)
+            lines += _flip_check_lines(occurrences)
             lines += _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm)
             lines += notes
         finally:
