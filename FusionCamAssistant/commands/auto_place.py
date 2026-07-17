@@ -78,6 +78,32 @@ def _unit_bodies(occurrence):
     return bodies
 
 
+def _top_face(occurrence):
+    """配置単位の「上面」（+Z 向きの最大平面。単位の最高高さにあるもの）を返す。
+    オカレンスを整列に渡すと「最大の面が下向き」に向け直され、平板（上下同面積）は
+    上下反転する（実機確認済み）。上面を渡して isGlobalDirectionFaceUp と組み合わせる
+    ことで向きを固定する。見つからなければ None。"""
+    best = None
+    best_area = 0.0
+    for body in _unit_bodies(occurrence):
+        try:
+            top_z = body.boundingBox.maxPoint.z
+            for face in body.faces:
+                if face.geometry.objectType != adsk.core.Plane.classType():
+                    continue
+                success, normal = face.evaluator.getNormalAtPoint(face.pointOnFace)
+                if not success or normal.z < 0.99:
+                    continue
+                if face.boundingBox.maxPoint.z < top_z - 0.005:  # cm: 上面高さ以外は除外
+                    continue
+                if face.area > best_area:
+                    best = face
+                    best_area = face.area
+        except Exception:
+            continue
+    return best
+
+
 def _collect_targets(root):
     targets = []
     for i in range(root.occurrences.count):
@@ -127,6 +153,18 @@ def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
         order = [('trueshape', adsk.fusion.ArrangeSolverTypes.Arrange2DTrueShapeSolverType),
                  ('rectangular', adsk.fusion.ArrangeSolverTypes.Arrange2DRectangularSolverType)]
 
+    # 上下反転防止: オカレンスではなく各部品の上面を渡す（api-notes.md 7 参照）
+    targets = []
+    faceless = []
+    for occurrence in occurrences:
+        face = _top_face(occurrence)
+        targets.append((occurrence, face))
+        if face is None:
+            faceless.append(occurrence.name)
+    if faceless:
+        notes.append('⚠ 上面を特定できなかった部品（上下の向きが保証されません。'
+                     '結果を目視確認）: ' + ', '.join(faceless))
+
     for solver_name, solver_type in order:
         try:
             arrange_input = arrange_features.createInput(solver_type)
@@ -161,9 +199,13 @@ def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
                     adsk.fusion.ArrangeRotationTypes.AllRotationsArrangeRotationType
             except Exception:
                 fusion_utils.log('globalRotation を設定できませんでした')
+            try:
+                definition.isGlobalDirectionFaceUp = True  # 渡した上面を上に向ける
+            except Exception:
+                fusion_utils.log('isGlobalDirectionFaceUp を設定できませんでした')
 
-            for occurrence in occurrences:
-                arrange_input.arrangeComponents.add(occurrence)
+            for occurrence, face in targets:
+                arrange_input.arrangeComponents.add(face if face is not None else occurrence)
 
             feature = arrange_features.add(arrange_input)
             return feature, solver_name
