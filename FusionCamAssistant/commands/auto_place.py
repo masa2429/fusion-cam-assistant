@@ -24,6 +24,7 @@ from . import layout_check
 
 COMMAND_ID = 'fcaAutoPlace'
 DESIGN_WORKSPACE_ID = 'FusionSolidEnvironment'
+CAM_WORKSPACE_ID = 'CAMEnvironment'
 FEATURE_NAME = '自動配置'
 ATTR_GROUP = 'FusionCamAssistant'
 ATTR_NAME = 'autoPlace'
@@ -33,6 +34,27 @@ _SOLVER_LABELS = {
     'trueshape': 'トゥルーシェイプ（実形状）',
     'rectangular': '矩形（バウンディングボックス）',
 }
+_SOLVER_OPTIONS = (
+    ('auto', '自動（トゥルーシェイプ → 矩形）'),
+    ('trueshape', 'トゥルーシェイプ（実形状）'),
+    ('rectangular', '矩形（バウンディングボックス）'),
+)
+_ROTATION_OPTIONS = (
+    ('all', '任意'),
+    ('quarter', '90°単位'),
+    ('half', '180°のみ'),
+    ('none', '回転なし'),
+)
+
+
+def _rotation_type(key):
+    types = adsk.fusion.ArrangeRotationTypes
+    return {
+        'all': types.AllRotationsArrangeRotationType,
+        'quarter': types.Only90And270ArrangeRotationType,
+        'half': types.Only180ArrangeRotationType,
+        'none': types.NoneArrangeRotationType,
+    }.get(key, types.AllRotationsArrangeRotationType)
 
 
 def start(panel):
@@ -127,7 +149,7 @@ def _mm(value_mm):
 
 
 def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
-                    gap_mm, edge_mm, solver_mode, notes):
+                    gap_mm, edge_mm, solver_mode, rotation_key, notes):
     """整列フィーチャを作成する。auto はトゥルーシェイプ→矩形の順に試す。"""
     if solver_mode == 'trueshape':
         order = [('trueshape', adsk.fusion.ArrangeSolverTypes.Arrange2DTrueShapeSolverType)]
@@ -167,8 +189,7 @@ def _create_arrange(root, arrange_features, occurrences, width_mm, depth_mm,
             except Exception:
                 fusion_utils.log('isCreateCopies を設定できませんでした')
             try:
-                definition.globalRotation = \
-                    adsk.fusion.ArrangeRotationTypes.AllRotationsArrangeRotationType
+                definition.globalRotation = _rotation_type(rotation_key)
             except Exception:
                 fusion_utils.log('globalRotation を設定できませんでした')
             # 上下反転防止: オカレンス渡しの既定の向きは平板を裏返す（実機確認済み）。
@@ -276,8 +297,10 @@ def _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm):
 
 
 def _on_created(args):
+    """配置ダイアログ（枠サイズ・間隔・余白・ソルバー・回転を編集して「配置」）。"""
     ui = fusion_utils.ui()
     try:
+        command = args.command
         design = fusion_utils.active_design()
         if not design:
             ui.messageBox('デザインのあるドキュメントで実行してください。')
@@ -290,20 +313,13 @@ def _on_created(args):
                           'Fusion を更新するか、「修正 → 整列」を手動で使ってください。',
                           '自動配置')
             return
-
-        config = fusion_utils.load_config()
-        width_mm = config.get('stock', {}).get('width_mm', 280)
-        depth_mm = config.get('stock', {}).get('depth_mm', 280)
-        gap_mm = config.get('part_gap_mm', 8.0)
-        edge_mm = config.get('placement_edge_margin_mm', 8.0)
-        solver_mode = str(config.get('arrange_solver', 'auto')).lower()
-
         occurrences = _collect_targets(root)
         if not occurrences:
             ui.messageBox('配置対象のコンポーネントがありません'
                           '（トップレベルの表示中コンポーネントが対象です）。', '自動配置')
             return
 
+        config = fusion_utils.load_config()
         warnings = []
         root_bodies = [b for b in root.bRepBodies if b.isSolid and b.isVisible]
         if root_bodies:
@@ -314,85 +330,170 @@ def _on_created(args):
             warnings.append('既存の切削データは配置に追従しません。'
                             '配置後に「切削データ自動作成」を再実行してください')
 
-        summary = [f'対象: トップレベルコンポーネント {len(occurrences)} 個',
-                   f'枠: {width_mm:g} × {depth_mm:g} mm（原点基準）',
-                   f'部品間隔: {gap_mm:g} mm ／ 枠からの余白: {edge_mm:g} mm',
-                   '回転: 任意（整列ソルバーに委任）']
+        inputs = command.commandInputs
+        header = (f'対象: トップレベルコンポーネント {len(occurrences)} 個\n'
+                  '（元に戻す場合は Ctrl+Z）')
         if warnings:
-            summary.append('')
-            summary.append('注意:')
-            summary += [f'・{w}' for w in warnings]
-        summary.append('')
-        summary.append('実行しますか？（元に戻す場合は Ctrl+Z）')
-        answer = ui.messageBox('\n'.join(summary), '自動配置',
-                               adsk.core.MessageBoxButtonTypes.YesNoButtonType)
-        if answer != adsk.core.DialogResults.DialogYes:
-            return
+            header += '\n⚠ ' + '\n⚠ '.join(warnings)
+        header_input = inputs.addTextBoxCommandInput(
+            'fcaApHeader', '', header, 3 + 2 * len(warnings), True)
+        header_input.isFullWidth = True
 
-        # 整列は設計フィーチャのため、製造ワークスペースがアクティブなままだと
-        # arrangeComponents.add が「No fusion asset adapter」で失敗する。
-        # 作成の間だけデザインワークスペースへ切り替え、終わったら元に戻す。
-        notes = []
-        previous_workspace = None
-        try:
-            active_workspace = ui.activeWorkspace
-            if active_workspace and active_workspace.id != DESIGN_WORKSPACE_ID:
-                design_workspace = ui.workspaces.itemById(DESIGN_WORKSPACE_ID)
-                if design_workspace:
-                    previous_workspace = active_workspace
-                    design_workspace.activate()
-                    adsk.doEvents()
-        except Exception:
-            fusion_utils.log('デザインワークスペースへの切替に失敗:\n' + traceback.format_exc())
+        def add_value(input_id, label, value_mm):
+            inputs.addValueInput(
+                input_id, label, 'mm',
+                adsk.core.ValueInput.createByReal(fusion_utils.mm_to_cm(value_mm)))
 
-        try:
-            removed = _delete_previous_features(arrange_features)
-            if removed:
-                notes.append(f'前回の自動配置フィーチャ {removed} 件を置き換えました。')
+        add_value('fcaApWidth', '枠の幅（X）', config.get('stock', {}).get('width_mm', 280))
+        add_value('fcaApDepth', '枠の奥行（Y）', config.get('stock', {}).get('depth_mm', 280))
+        add_value('fcaApGap', '部品間隔', config.get('part_gap_mm', 8.0))
+        add_value('fcaApEdge', '枠からの余白', config.get('placement_edge_margin_mm', 8.0))
 
-            feature, solver_used = _create_arrange(
-                root, arrange_features, occurrences, width_mm, depth_mm,
-                gap_mm, edge_mm, solver_mode, notes)
-            if feature is None:
-                ui.messageBox('整列フィーチャを作成できませんでした。\n'
-                              '詳細はテキストコマンドウィンドウ / %TEMP%\\fusioncam.log を確認してください。',
-                              '自動配置')
-                return
+        solver_default = str(config.get('arrange_solver', 'auto')).lower()
+        solver_input = inputs.addDropDownCommandInput(
+            'fcaApSolver', 'ソルバー', adsk.core.DropDownStyles.TextListDropDownStyle)
+        for key, label in _SOLVER_OPTIONS:
+            solver_input.listItems.add(label, key == solver_default)
+        rotation_input = inputs.addDropDownCommandInput(
+            'fcaApRotation', '回転', adsk.core.DropDownStyles.TextListDropDownStyle)
+        for key, label in _ROTATION_OPTIONS:
+            rotation_input.listItems.add(label, key == 'all')
+        inputs.addBoolValueInput('fcaApGotoCam', '完了後に製造ワークスペースへ切替',
+                                 True, '', True)
 
-            try:
-                feature.name = FEATURE_NAME
-            except Exception:
-                pass
-            try:
-                feature.attributes.add(ATTR_GROUP, ATTR_NAME, '1')
-            except Exception:
-                fusion_utils.log('自動配置フィーチャへの属性付与に失敗:\n' + traceback.format_exc())
-
-            lines = [f'ソルバー: {_SOLVER_LABELS.get(solver_used, solver_used)}']
-            lines += _statistics_lines(feature)
-            lines += _flip_check_lines(occurrences)
-            lines += _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm)
-            lines += notes
-        finally:
-            if previous_workspace is not None:
-                try:
-                    previous_workspace.activate()
-                    adsk.doEvents()
-                except Exception:
-                    fusion_utils.log('ワークスペースの復帰に失敗:\n' + traceback.format_exc())
-        if solver_used == 'trueshape':
-            lines.append('ℹ トゥルーシェイプ配置では「配置チェック」の間隔警告（bbox 目安）が'
-                         '出ることがあります（実形状で 8mm 確保済みなら問題なし）')
-        lines.append('')
-        lines.append('このあと「切削データ自動作成」を実行してください。')
-
-        if not layout_check.has_frame_sketch(root):
-            answer = ui.messageBox(
-                '\n'.join(lines) + '\n\n配置ガイドの枠スケッチ（280×280、原点基準）を作成しますか？',
-                '自動配置', adsk.core.MessageBoxButtonTypes.YesNoButtonType)
-            if answer == adsk.core.DialogResults.DialogYes:
-                layout_check.create_frame_sketch(root, width_mm, depth_mm)
-        else:
-            ui.messageBox('\n'.join(lines), '自動配置')
+        command.okButtonText = '配置'
+        command.execute.add(fusion_utils.keep(_ExecuteHandler()))
     except Exception:
         ui.messageBox('自動配置に失敗:\n{}'.format(traceback.format_exc()))
+
+
+def _selected_key(inputs, input_id, options, default_key):
+    dropdown = inputs.itemById(input_id)
+    if dropdown is not None and dropdown.selectedItem is not None:
+        for key, label in options:
+            if label == dropdown.selectedItem.name:
+                return key
+    return default_key
+
+
+def _value_mm(inputs, input_id, default_mm):
+    item = inputs.itemById(input_id)
+    if item is None:
+        return default_mm
+    return fusion_utils.cm_to_mm(item.value)  # ValueInput の内部値は cm
+
+
+class _ExecuteHandler(adsk.core.CommandEventHandler):
+    def notify(self, args):
+        ui = fusion_utils.ui()
+        try:
+            inputs = args.command.commandInputs
+            width_mm = _value_mm(inputs, 'fcaApWidth', 280)
+            depth_mm = _value_mm(inputs, 'fcaApDepth', 280)
+            gap_mm = _value_mm(inputs, 'fcaApGap', 8.0)
+            edge_mm = _value_mm(inputs, 'fcaApEdge', 8.0)
+            solver_mode = _selected_key(inputs, 'fcaApSolver', _SOLVER_OPTIONS, 'auto')
+            rotation_key = _selected_key(inputs, 'fcaApRotation', _ROTATION_OPTIONS, 'all')
+            goto_input = inputs.itemById('fcaApGotoCam')
+            goto_cam = bool(goto_input.value) if goto_input is not None else False
+            _run_placement(ui, width_mm, depth_mm, gap_mm, edge_mm,
+                           solver_mode, rotation_key, goto_cam)
+        except Exception:
+            ui.messageBox('自動配置に失敗:\n{}'.format(traceback.format_exc()))
+
+
+def _run_placement(ui, width_mm, depth_mm, gap_mm, edge_mm,
+                   solver_mode, rotation_key, goto_cam):
+    design = fusion_utils.active_design()
+    if design is None:
+        return
+    root = design.rootComponent
+    arrange_features = getattr(root.features, 'arrangeFeatures', None)
+    if arrange_features is None:
+        return
+    occurrences = _collect_targets(root)
+    if not occurrences:
+        ui.messageBox('配置対象のコンポーネントがありません。', '自動配置')
+        return
+
+    # 整列は設計フィーチャのため、製造ワークスペースがアクティブなままだと
+    # arrangeComponents.add が「No fusion asset adapter」で失敗する。
+    # 作成の間だけデザインワークスペースへ切り替える。
+    notes = []
+    previous_workspace = None
+    try:
+        active_workspace = ui.activeWorkspace
+        if active_workspace and active_workspace.id != DESIGN_WORKSPACE_ID:
+            design_workspace = ui.workspaces.itemById(DESIGN_WORKSPACE_ID)
+            if design_workspace:
+                previous_workspace = active_workspace
+                design_workspace.activate()
+                adsk.doEvents()
+    except Exception:
+        fusion_utils.log('デザインワークスペースへの切替に失敗:\n' + traceback.format_exc())
+
+    success = False
+    lines = []
+    solver_used = None
+    try:
+        removed = _delete_previous_features(arrange_features)
+        if removed:
+            notes.append(f'前回の自動配置フィーチャ {removed} 件を置き換えました。')
+
+        feature, solver_used = _create_arrange(
+            root, arrange_features, occurrences, width_mm, depth_mm,
+            gap_mm, edge_mm, solver_mode, rotation_key, notes)
+        if feature is None:
+            ui.messageBox('整列フィーチャを作成できませんでした。\n'
+                          '詳細はテキストコマンドウィンドウ / %TEMP%\\fusioncam.log を確認してください。',
+                          '自動配置')
+            return
+        success = True
+
+        try:
+            feature.name = FEATURE_NAME
+        except Exception:
+            pass
+        try:
+            feature.attributes.add(ATTR_GROUP, ATTR_NAME, '1')
+        except Exception:
+            fusion_utils.log('自動配置フィーチャへの属性付与に失敗:\n' + traceback.format_exc())
+
+        lines = [f'ソルバー: {_SOLVER_LABELS.get(solver_used, solver_used)}']
+        lines += _statistics_lines(feature)
+        lines += _flip_check_lines(occurrences)
+        lines += _frame_check_lines(occurrences, width_mm, depth_mm, edge_mm)
+        lines += notes
+    finally:
+        # 成功して製造へ移る場合は復帰しない（このあと製造をアクティブにする）
+        if previous_workspace is not None and not (goto_cam and success):
+            try:
+                previous_workspace.activate()
+                adsk.doEvents()
+            except Exception:
+                fusion_utils.log('ワークスペースの復帰に失敗:\n' + traceback.format_exc())
+
+    if solver_used == 'trueshape':
+        lines.append('ℹ トゥルーシェイプ配置では「配置チェック」の間隔警告（bbox 目安）が'
+                     '出ることがあります（実形状で 8mm 確保済みなら問題なし）')
+    lines.append('')
+    lines.append('このあと「切削データ自動作成」を実行してください。')
+
+    if not layout_check.has_frame_sketch(root):
+        answer = ui.messageBox(
+            '\n'.join(lines) + '\n\n配置ガイドの枠スケッチ'
+            f'（{width_mm:g}×{depth_mm:g}、原点基準）を作成しますか？',
+            '自動配置', adsk.core.MessageBoxButtonTypes.YesNoButtonType)
+        if answer == adsk.core.DialogResults.DialogYes:
+            layout_check.create_frame_sketch(root, width_mm, depth_mm)
+    else:
+        ui.messageBox('\n'.join(lines), '自動配置')
+
+    if goto_cam and success:
+        try:
+            cam_workspace = ui.workspaces.itemById(CAM_WORKSPACE_ID)
+            if cam_workspace:
+                cam_workspace.activate()
+                adsk.doEvents()
+        except Exception:
+            fusion_utils.log('製造ワークスペースへの切替に失敗:\n' + traceback.format_exc())
