@@ -127,18 +127,39 @@ def build(cam, classify_result, plan_items, config):
     return report
 
 
-def _wait_for_generation(future, timeout_seconds):
-    """ツールパス生成の完了を UI を固めずに待つ。タイムアウトで False。"""
+def _wait_for_generation(future, timeout_seconds, title='切削データ自動作成'):
+    """ツールパス生成の完了を UI を固めずに待つ。タイムアウトで False。
+    2件以上の生成ではプログレスダイアログで進行を表示する（フリーズに見える問題の対策）。"""
     deadline = time.monotonic() + timeout_seconds
+    progress = None
+    try:
+        total = future.numberOfOperations
+        if total > 1:
+            progress = fusion_utils.ui().createProgressDialog()
+            progress.isCancelButtonShown = False
+            progress.show(title, 'ツールパス生成中: %v / %m 操作', 0, total, 0)
+    except Exception:
+        progress = None
     try:
         while not future.isGenerationCompleted:
             if time.monotonic() > deadline:
                 return False
+            if progress is not None:
+                try:
+                    progress.progressValue = future.numberOfCompleted
+                except Exception:
+                    pass
             adsk.doEvents()
             time.sleep(0.1)
         return True
     except Exception:
         return False
+    finally:
+        if progress is not None:
+            try:
+                progress.hide()
+            except Exception:
+                pass
 
 
 def _delete_empty_operations(operations, report):

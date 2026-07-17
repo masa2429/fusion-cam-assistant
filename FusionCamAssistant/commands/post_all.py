@@ -198,7 +198,7 @@ def _on_created(args):
         # 「要更新」の検出はバージョン差があり当てにならないため無条件で呼ぶ）
         try:
             future = cam.generateAllToolpaths(True)
-            cam_builder._wait_for_generation(future, timeout_seconds=180)
+            cam_builder._wait_for_generation(future, timeout_seconds=180, title='NC一括出力')
         except Exception:
             fusion_utils.log('再生成に失敗:\n' + traceback.format_exc())
 
@@ -232,10 +232,24 @@ def _on_created(args):
                 pass
 
         groups = _group_by_tool(operations)
+        progress = None
+        try:
+            if len(groups) > 1:
+                progress = ui.createProgressDialog()
+                progress.isCancelButtonShown = False
+                progress.show('NC一括出力', 'ポスト中: %v / %m ファイル', 0, len(groups), 0)
+        except Exception:
+            progress = None
         created_names = []
         failed_names = []
         group_details = []
         for index, (diameter, group_operations) in enumerate(groups, start=1):
+            if progress is not None:
+                try:
+                    progress.progressValue = index - 1
+                    adsk.doEvents()
+                except Exception:
+                    pass
             dia_text = f'{diameter:g}' if diameter is not None else 'unknown'
             name = f'{index}_flat{dia_text}'
             try:
@@ -255,6 +269,12 @@ def _on_created(args):
             except Exception:
                 failed_names.append(name)
                 fusion_utils.log(f'NCポスト失敗 {name}:\n{traceback.format_exc()}')
+
+        if progress is not None:
+            try:
+                progress.hide()
+            except Exception:
+                pass
 
         instructions_note = ''
         if group_details:
