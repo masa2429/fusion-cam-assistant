@@ -414,6 +414,7 @@ def _interior_point(face):
     計算して最後にオカレンス変換でワールドへ直す（境界点も同じネイティブ空間で
     取るので距離計算は整合する）。"""
     try:
+        proxy = face
         transform = fusion_utils.proxy_world_transform(face)
         if transform is not None:
             face = face.nativeObject
@@ -446,6 +447,16 @@ def _interior_point(face):
                     best_point = world
         if best_point is not None and transform is not None:
             best_point.transformBy(transform)  # ネイティブ → ワールド
+            # 自己検証: 変換後の点は必ず元のプロキシ面の bbox 内にあるはず。
+            # 外れている場合は座標系の解釈違い（二重変換など）なのでログに残す
+            box = proxy.boundingBox
+            if not (box.minPoint.x - 0.1 <= best_point.x <= box.maxPoint.x + 0.1
+                    and box.minPoint.y - 0.1 <= best_point.y <= box.maxPoint.y + 0.1):
+                fusion_utils.log(
+                    f'[進入点デバッグ] 変換後の進入点が面のbbox外: '
+                    f'点=({best_point.x:.2f},{best_point.y:.2f}) '
+                    f'bbox=({box.minPoint.x:.2f},{box.minPoint.y:.2f})-'
+                    f'({box.maxPoint.x:.2f},{box.maxPoint.y:.2f})')
         return best_point
     except Exception:
         return None
@@ -584,10 +595,15 @@ def _boundary_sketch_plane(root, z_cm):
     return plane
 
 
-def _ordered_coedge_entries(loop, outward_by_edge, margin_cm):
+def _ordered_coedge_entries(loop, open_edge_ids, margin_cm):
     """外周ループをコエッジ順にたどり、辺ごとの情報を返す。
-    entry = (edge, is_open, start(x,y), end(x,y), offset(dx,dy))"""
-    entries = []
+    entry = (edge, is_open, start(x,y), end(x,y), offset(dx,dy))
+
+    開口辺のオフセット方向（外向き）は、ループ自身の周回方向（符号付き面積）から
+    「進行方向の右手／左手」で決める。頂点座標（プロキシでもワールド）だけを使うので、
+    evaluator の座標系文脈（プロキシで不定。回転配置で壁法線が内側を向いた実機事例）
+    に依存しない。"""
+    raw = []
     for i in range(loop.coEdges.count):
         coedge = loop.coEdges.item(i)
         edge = coedge.edge
@@ -595,17 +611,26 @@ def _ordered_coedge_entries(loop, outward_by_edge, margin_cm):
         end = edge.endVertex.geometry
         if coedge.isOpposedToEdge:
             start, end = end, start
-        normal = outward_by_edge.get(edge.tempId)
-        is_open = (normal is not None and
+        raw.append((edge, (start.x, start.y), (end.x, end.y)))
+    # +Z 視点の符号付き面積（曲線エッジは弦で近似。向きの判定には十分）
+    area2 = sum(x1 * y2 - x2 * y1 for _, (x1, y1), (x2, y2) in raw)
+    outward_sign = 1.0 if area2 > 0 else -1.0  # CCW なら進行方向の右手 (dy,-dx) が外
+
+    entries = []
+    for edge, start, end in raw:
+        is_open = (edge.tempId in open_edge_ids and
                    edge.geometry.curveType == adsk.core.Curve3DTypes.Line3DCurveType)
         offset = None
         if is_open:
-            length = math.hypot(normal.x, normal.y)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
             if length < 1e-9:
                 is_open = False
             else:
-                offset = (normal.x / length * margin_cm, normal.y / length * margin_cm)
-        entries.append((edge, is_open, (start.x, start.y), (end.x, end.y), offset))
+                offset = (outward_sign * dy / length * margin_cm,
+                          -outward_sign * dx / length * margin_cm)
+        entries.append((edge, is_open, start, end, offset))
     return entries
 
 
@@ -697,7 +722,9 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
         fusion_utils.log('境界スケッチの作成に失敗:\n' + traceback.format_exc())
         return None
     sketch.name = f'{BOUNDARY_SKETCH_PREFIX}{_boundary_sketch_counter}'
-    outward_by_edge = {edge.tempId: normal for edge, normal in open_edges}
+    open_edge_ids = {edge.tempId for edge, _ in open_edges}
+    # 診断: 壁法線（旧方式）と周回方向由来の外向きの食い違いをログに残す
+    normal_by_edge = {edge.tempId: normal for edge, normal in open_edges}
     lines = sketch.sketchCurves.sketchLines
 
     def add_polyline(points_xy):
@@ -718,10 +745,23 @@ def _build_extended_boundary_sketch(face, open_edges, margin_cm):
                     for edge in loop.edges:
                         sketch.project(edge)
                 continue
-            entries = _ordered_coedge_entries(loop, outward_by_edge, margin_cm)
+            entries = _ordered_coedge_entries(loop, open_edge_ids, margin_cm)
             count = len(entries)
             if count == 0:
                 continue
+            # 診断ログ: 壁法線（evaluator 由来）と周回方向由来の外向きの比較
+            for edge, is_open, start, end, offset in entries:
+                if not is_open:
+                    continue
+                normal = normal_by_edge.get(edge.tempId)
+                if normal is None:
+                    continue
+                dot = normal.x * offset[0] + normal.y * offset[1]
+                if dot < 0:
+                    fusion_utils.log(
+                        f'[境界デバッグ] 壁法線と周回方向の外向きが不一致: '
+                        f'辺({start[0]:.2f},{start[1]:.2f})→({end[0]:.2f},{end[1]:.2f}) '
+                        f'法線=({normal.x:.2f},{normal.y:.2f}) 採用オフセット=({offset[0]:.2f},{offset[1]:.2f})')
             has_open = any(e[1] for e in entries)
             if not has_open:
                 for edge, *_ in entries:
