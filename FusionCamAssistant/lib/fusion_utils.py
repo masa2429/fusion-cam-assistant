@@ -150,18 +150,37 @@ class _CreatedHandler(adsk.core.CommandCreatedEventHandler):
             ui().messageBox('コマンド作成に失敗:\n{}'.format(traceback.format_exc()))
 
 
+RESOURCES_DIR = os.path.join(ADDIN_DIR, 'resources')
+
+
 def add_command(panel, command_id, name, tooltip, on_created):
-    """コマンド定義＋パネルボタンを登録する。on_created(args) がダイアログ構築を担う。"""
+    """コマンド定義＋パネルボタンを登録する。on_created(args) がダイアログ構築を担う。
+    resources/<command_id>/ にアイコン（16x16.png 等）があればボタンに使う。"""
     definitions = ui().commandDefinitions
     definition = definitions.itemById(command_id)
     if definition:
         definition.deleteMe()
-    definition = definitions.addButtonDefinition(command_id, name, tooltip)
+    resource_folder = os.path.join(RESOURCES_DIR, command_id)
+    if os.path.isdir(resource_folder):
+        definition = definitions.addButtonDefinition(command_id, name, tooltip, resource_folder)
+    else:
+        definition = definitions.addButtonDefinition(command_id, name, tooltip)
     definition.commandCreated.add(keep(_CreatedHandler(on_created)))
-    control = panel.controls.itemById(command_id)
-    if not control:
-        panel.controls.addCommand(definition)
+    add_control(panel, definition)
     return definition
+
+
+def add_control(panel, definition):
+    """パネルにボタンを追加し、ドロップダウン内でなくアイコンボタンとして直接表示（昇格）する。"""
+    control = panel.controls.itemById(definition.id)
+    if not control:
+        control = panel.controls.addCommand(definition)
+    try:
+        control.isPromoted = True
+        control.isPromotedByDefault = True
+    except Exception:
+        log(f'ボタンの昇格に失敗: {definition.id}')
+    return control
 
 
 def remove_command(panel, command_id):
