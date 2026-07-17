@@ -11,6 +11,10 @@ from .lib import fusion_utils, update_check
 WORKSPACE_ID = 'CAMEnvironment'  # 製造ワークスペース
 PANEL_ID = 'FusionCamPanel'
 PANEL_NAME = 'CAM アシスタント'
+# 配置作業はデザイン側で行うため、配置系コマンドはデザインワークスペースにも出す
+DESIGN_WORKSPACE_ID = 'FusionSolidEnvironment'
+DESIGN_PANEL_ID = 'FusionCamDesignPanel'
+DESIGN_COMMAND_IDS = (auto_place.COMMAND_ID, layout_check.COMMAND_ID)
 
 COMMAND_MODULES = [auto_cam, post_all, auto_place, layout_check, settings, about]
 
@@ -31,6 +35,18 @@ def run(context):
         panel = workspace.toolbarPanels.add(PANEL_ID, PANEL_NAME)
         for module in COMMAND_MODULES:
             module.start(panel)
+
+        # デザインワークスペース側のパネル（配置系コマンドの複製ボタン）
+        design_workspace = ui.workspaces.itemById(DESIGN_WORKSPACE_ID)
+        if design_workspace:
+            leftover = design_workspace.toolbarPanels.itemById(DESIGN_PANEL_ID)
+            if leftover:
+                leftover.deleteMe()
+            design_panel = design_workspace.toolbarPanels.add(DESIGN_PANEL_ID, PANEL_NAME)
+            for command_id in DESIGN_COMMAND_IDS:
+                definition = ui.commandDefinitions.itemById(command_id)
+                if definition:
+                    fusion_utils.add_control(design_panel, definition)
         fusion_utils.log('アドイン起動完了')
         try:
             update_check.notify_if_updated()
@@ -45,6 +61,12 @@ def stop(context):
     ui = None
     try:
         ui = fusion_utils.ui()
+        # デザイン側パネルを先に消す（コマンド定義の削除より前にボタンを片付ける）
+        design_workspace = ui.workspaces.itemById(DESIGN_WORKSPACE_ID)
+        if design_workspace:
+            design_panel = design_workspace.toolbarPanels.itemById(DESIGN_PANEL_ID)
+            if design_panel:
+                design_panel.deleteMe()
         for module in COMMAND_MODULES:
             try:
                 module.stop()
