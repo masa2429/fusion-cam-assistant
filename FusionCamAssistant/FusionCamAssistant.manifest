@@ -6,7 +6,7 @@
     "description": {
         "": "Fusion CAM Assistant: 切削データ作成の自動化（セットアップ生成・輪郭/穴の自動選択とテンプレート適用・NC出力・配置チェック）"
     },
-    "version": "0.5.0",
+    "version": "0.6.0",
     "runOnStartup": true,
     "supportedOS": "windows|mac",
     "editEnabled": true
