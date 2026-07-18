@@ -142,6 +142,24 @@ def draw_about(d, s, pal):
                         radius=s * 0.05, fill=blue)
 
 
+def draw_report(d, s, pal):
+    """問題を報告: 角丸吹き出し（しっぽ左下、GRAY輪郭）＋ビックリマーク（BLUE）"""
+    gray, blue = pal['gray'], pal['blue']
+    w = int(s * 0.06)
+    # 吹き出し本体（draw_about / draw_post_all と同じ線幅・スケール感の輪郭のみ）
+    d.rounded_rectangle(_pts(s, [(0.10, 0.10), (0.90, 0.66)]), radius=s * 0.09,
+                        outline=gray, width=w)
+    # しっぽ（左下）。両端は本体の下辺上に置き、下辺のストロークとつながって見えるようにする
+    d.line(_pts(s, [(0.40, 0.66), (0.14, 0.88), (0.24, 0.66)]), fill=gray,
+           width=w, joint='curve')
+    # ビックリマーク（draw_about の「i」と同じ部品を上下反転した配置）
+    cx = s * 0.5
+    d.rounded_rectangle([cx - s * 0.055, s * 0.20, cx + s * 0.055, s * 0.46],
+                        radius=s * 0.05, fill=blue)
+    dot = s * 0.065
+    d.ellipse([cx - dot, s * 0.56 - dot, cx + dot, s * 0.56 + dot], fill=blue)
+
+
 ICONS = {
     'fcaAutoCam': draw_auto_cam,
     'fcaPostAll': draw_post_all,
@@ -149,6 +167,7 @@ ICONS = {
     'fcaLayoutCheck': draw_layout_check,
     'fcaSettings': draw_settings,
     'fcaAbout': draw_about,
+    'fcaReport': draw_report,
 }
 
 
