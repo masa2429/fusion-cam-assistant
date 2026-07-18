@@ -22,5 +22,15 @@
         "内郭ポケット": [5.0, 4.0, 3.0, 1.5],
         "ざぐり": [3.0, 2.0, 1.5],
         "取り残し加工": [1.5, 3.0]
+    },
+    "report_form": {
+        "url": "https://docs.google.com/forms/d/e/1FAIpQLSesmdYZUwAAXE8UiQJFd_9KFQIDMu9-TITs1oaesHFT7vMacw/formResponse",
+        "fields": {
+            "reporter": "entry.1668771634",
+            "symptom": "entry.915997714",
+            "command": "entry.1271670401",
+            "version": "entry.985532502",
+            "report": "entry.190589015"
+        }
     }
 }

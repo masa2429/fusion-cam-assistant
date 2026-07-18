@@ -8,6 +8,8 @@ import datetime
 import os
 import tempfile
 import traceback
+import urllib.parse
+import urllib.request
 
 import adsk.core
 
@@ -16,6 +18,12 @@ from . import update_check
 
 # 「〜へ送って報告」の文言に使う。将来宛先を変えやすいよう定数化。
 REPORT_HINT = '開発者'
+
+# フォームへ送るレポート本文の上限。超えたら先頭を切り詰める
+# （末尾にログと traceback があり、そちらが重要なため末尾を優先して残す）。
+MAX_SUBMIT_CHARS = 40000
+
+_TRUNCATE_MARK = '...(先頭を省略)...\n'
 
 
 def _log_tail(max_lines=80):
@@ -118,20 +126,128 @@ def open_report(path):
         fusion_utils.log('レポートを開けませんでした: ' + path)
 
 
+def _form_config():
+    """config.json の report_form を返す。未設定・不正・読み込み失敗なら None。
+    ❗ 例外を投げない（送信が使えなくてもファイル方式へ退避できるようにするため）。"""
+    try:
+        config = fusion_utils.load_config()
+    except Exception:
+        return None
+    try:
+        form = config.get('report_form')
+        if not isinstance(form, dict):
+            return None
+        url = form.get('url')
+        fields = form.get('fields')
+        if not url or not isinstance(fields, dict) or not fields:
+            return None
+        return {'url': url, 'fields': fields}
+    except Exception:
+        return None
+
+
+def can_submit():
+    """フォーム送信が使えるか。False なら従来のファイル方式で報告する。"""
+    return _form_config() is not None
+
+
+def _truncate_for_submit(text):
+    """上限を超えたら末尾を残して先頭を切り詰める。"""
+    text = text or ''
+    if len(text) <= MAX_SUBMIT_CHARS:
+        return text
+    keep = MAX_SUBMIT_CHARS - len(_TRUNCATE_MARK)
+    return _TRUNCATE_MARK + text[-keep:]
+
+
+def submit_report(report_text, command_name, symptom='', reporter='', timeout_seconds=10):
+    """Google フォームへレポートを POST する。成功なら True。
+    ❗ 例外を外に投げない（失敗はログに残して False）。"""
+    form = _form_config()
+    if form is None:
+        return False
+    try:
+        try:
+            version = update_check.local_version()
+        except Exception:
+            version = '(取得失敗)'
+
+        fields = form['fields']
+        values = {
+            'reporter': reporter or '',
+            'symptom': symptom or '',
+            'command': command_name or '',
+            'version': version,
+            'report': _truncate_for_submit(report_text),
+        }
+        payload = {}
+        for key, entry_id in fields.items():
+            if entry_id:
+                payload[entry_id] = values.get(key, '')
+
+        data = urllib.parse.urlencode(payload).encode('utf-8')
+        request = urllib.request.Request(
+            form['url'], data=data, headers={'User-Agent': 'FusionCamAssistant'})
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = getattr(response, 'status', None) or response.getcode()
+        if 200 <= int(status) < 300:
+            return True
+        fusion_utils.log('レポート送信に失敗: HTTP {}'.format(status))
+        return False
+    except Exception:
+        fusion_utils.log('レポート送信に失敗: ' + traceback.format_exc())
+        return False
+
+
+def submit_or_open(report_text, path, command_name, symptom='', reporter=''):
+    """送信を試み、失敗したらローカルのレポートを開く。戻り値は送信できたか。"""
+    if submit_report(report_text, command_name, symptom=symptom, reporter=reporter):
+        return True
+    open_report(path)
+    return False
+
+
 def show_error_report(command_name):
     """例外の except 節から呼ぶ。環境＋traceback＋ログの報告を作って開く。
     ❗ この関数自体は絶対に例外を投げない（最後の手段の messageBox まで try で囲む）。"""
     try:
         exc_text = traceback.format_exc()
         text = build_report(command_name, exc_text=exc_text)
+        # 送信可否に関わらず、まずローカルに必ず残す
         path = write_report(text)
-        open_report(path)
         fusion_utils.log('不具合レポート: ' + path)
-        fusion_utils.ui().messageBox(
-            'エラーが発生しました。不具合レポートを作成しました。\n'
-            '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n'
-            '可能なら対象の f3d も共有してください。\n\n' + path,
-            'Fusion CAM Assistant')
+
+        if not can_submit():
+            # 送信先が未設定・設定が壊れている場合は従来のファイル方式
+            open_report(path)
+            fusion_utils.ui().messageBox(
+                'エラーが発生しました。不具合レポートを作成しました。\n'
+                '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n'
+                '可能なら対象の f3d も共有してください。\n\n' + path,
+                'Fusion CAM Assistant')
+            return
+
+        result = fusion_utils.ui().messageBox(
+            'エラーが発生しました。\n不具合レポートを開発者に送信しますか？\n\n'
+            '送信内容：アドイン version・Fusion バージョン・ドキュメント名・'
+            'エラー内容・直近のログ\n\n保存先: ' + path,
+            'Fusion CAM Assistant',
+            adsk.core.MessageBoxButtonTypes.YesNoButtonType,
+            adsk.core.MessageBoxIconTypes.QuestionIconType)
+        if result != adsk.core.DialogResults.DialogYes:
+            # 利用者が拒否したのでファイルも開かない（パスはログに残す）
+            fusion_utils.log('レポート送信は見送られました: ' + path)
+            return
+
+        if submit_or_open(text, path, command_name):
+            fusion_utils.ui().messageBox(
+                '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path,
+                'Fusion CAM Assistant')
+        else:
+            fusion_utils.ui().messageBox(
+                '送信に失敗しました（オフラインの可能性）。\n'
+                '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path,
+                'Fusion CAM Assistant')
     except Exception:
         try:
             fusion_utils.ui().messageBox('エラー:\n' + traceback.format_exc())
