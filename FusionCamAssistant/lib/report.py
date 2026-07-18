@@ -1,5 +1,5 @@
 # 不具合レポート生成：環境情報＋症状＋traceback＋直近ログを .txt に書き出し、
-# メモ帳で開いて部内チャットへ貼り付けてもらう（クリップボード API が不確実なため）。
+# メモ帳で開いて開発者へ送ってもらう（クリップボード API が不確実なため）。
 #
 # 自動トリガー（例外時の show_error_report）と手動トリガー（「問題を報告」コマンド）の
 # 両方から使う。報告経路は必ずオフラインで速いこと（newer_remote_version は呼ばない）。
@@ -14,8 +14,8 @@ import adsk.core
 from . import fusion_utils
 from . import update_check
 
-# 「〜へ貼り付けて報告」の文言に使う。将来チャット名に差し替えやすいよう定数化。
-REPORT_HINT = '部内チャット'
+# 「〜へ送って報告」の文言に使う。将来宛先を変えやすいよう定数化。
+REPORT_HINT = '開発者'
 
 
 def _log_tail(max_lines=80):
@@ -129,7 +129,7 @@ def show_error_report(command_name):
         fusion_utils.log('不具合レポート: ' + path)
         fusion_utils.ui().messageBox(
             'エラーが発生しました。不具合レポートを作成しました。\n'
-            '開いたテキストの内容を' + REPORT_HINT + 'に貼り付けて報告してください。\n'
+            '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n'
             '可能なら対象の f3d も共有してください。\n\n' + path,
             'Fusion CAM Assistant')
     except Exception:

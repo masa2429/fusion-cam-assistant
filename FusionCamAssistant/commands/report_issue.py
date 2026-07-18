@@ -56,7 +56,7 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             fusion_utils.log('不具合レポート（手動）: ' + path)
             ui.messageBox(
                 '報告テキストを作成しました。\n'
-                'この内容を' + report.REPORT_HINT + 'に貼り付けてください。\n'
+                'この内容を' + report.REPORT_HINT + 'に送ってください。\n'
                 '可能なら対象 f3d も共有してください。\n\n' + path,
                 'Fusion CAM Assistant')
         except Exception:
