@@ -44,10 +44,14 @@ def _on_created(args):
             3, True)
         privacy.isFullWidth = True
 
+    # 大きなデザインで書き出しに時間がかかる場合に外せるようにする
+    inputs.addBoolValueInput(
+        'fcaReportExportF3d', 'f3d も書き出す（推奨）', True, '', True)
+
     note = inputs.addTextBoxCommandInput(
         'fcaReportNote', '',
-        '報告前に、対象の f3d を保存してください。'
-        '可能なら報告と一緒に f3d も共有してください。',
+        '自動で送れるのはテキストのみです。f3d は書き出したファイルを'
+        'エクスプローラーで表示するので、それを添えて送ってください。',
         2, True)
     note.isFullWidth = True
 
@@ -64,30 +68,47 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             symptom = symptom_input.text if symptom_input is not None else ''
             reporter_input = inputs.itemById('fcaReportReporter')
             reporter = reporter_input.value if reporter_input is not None else ''
+            export_input = inputs.itemById('fcaReportExportF3d')
+            want_f3d = export_input.value if export_input is not None else False
 
             # 送信可否に関わらず、まずローカルに必ず残す
             text = report.build_report('（手動報告）', symptom=symptom)
             path = report.write_report(text)
             fusion_utils.log('不具合レポート（手動）: ' + path)
 
+            # .txt と対になる .f3d を書き出し、本文にも場所を載せて上書き保存する
+            f3d_path = report.export_f3d(path) if want_f3d else None
+            if f3d_path:
+                text = report.build_report('（手動報告）', symptom=symptom,
+                                           f3d_path=f3d_path)
+                report.rewrite_report(path, text)
+                fusion_utils.log('対象 f3d: ' + f3d_path)
+
             if not report.can_submit():
                 report.open_report(path)
                 ui.messageBox(
                     '報告テキストを作成しました。\n'
                     'この内容を' + report.REPORT_HINT + 'に送ってください。\n'
-                    '可能なら対象 f3d も共有してください。\n\n' + path,
+                    '可能なら対象 f3d も共有してください。\n\n' + path
+                    + report.f3d_message(f3d_path),
                     'Fusion CAM Assistant')
+                if f3d_path:
+                    report.reveal_in_explorer(f3d_path)
                 return
 
             if report.submit_or_open(text, path, '（手動報告）',
                                      symptom=symptom, reporter=reporter):
                 ui.messageBox(
-                    '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path,
+                    '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
+                    + report.f3d_message(f3d_path),
                     'Fusion CAM Assistant')
             else:
                 ui.messageBox(
                     '送信に失敗しました（オフラインの可能性）。\n'
-                    '開いたテキストの内容を' + report.REPORT_HINT + 'に送ってください。\n\n' + path,
+                    '開いたテキストの内容を' + report.REPORT_HINT + 'に送ってください。\n\n' + path
+                    + report.f3d_message(f3d_path),
                     'Fusion CAM Assistant')
+            if f3d_path:
+                report.reveal_in_explorer(f3d_path)
         except Exception:
             report.show_error_report('問題を報告')

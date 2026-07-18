@@ -6,6 +6,7 @@
 
 import datetime
 import os
+import subprocess
 import tempfile
 import traceback
 import urllib.parse
@@ -86,8 +87,8 @@ def _environment_lines(command_name):
     return lines
 
 
-def build_report(command_name, symptom=None, exc_text=None):
-    """報告テキストを組み立てて返す。"""
+def build_report(command_name, symptom=None, exc_text=None, f3d_path=None):
+    """報告テキストを組み立てて返す。f3d_path を渡すと書き出した f3d の場所も載せる。"""
     parts = ['Fusion CAM Assistant 不具合レポート']
     parts.extend(_environment_lines(command_name))
 
@@ -95,6 +96,11 @@ def build_report(command_name, symptom=None, exc_text=None):
         parts.append('')
         parts.append('--- 症状（利用者記入）---')
         parts.append(symptom)
+
+    if f3d_path:
+        parts.append('')
+        parts.append('--- 対象 f3d ---')
+        parts.append(f3d_path + '（このファイルを別途送ってもらってください）')
 
     if exc_text:
         parts.append('')
@@ -108,14 +114,65 @@ def build_report(command_name, symptom=None, exc_text=None):
     return '\n'.join(parts)
 
 
-def write_report(text):
-    """報告テキストを %TEMP% に書き、絶対パスを返す。
+def _write_to(path, text):
+    """指定パスへ報告テキストを書く（上書き）。
     メモ帳で日本語が化けないよう utf-8-sig（BOM 付き）で書く。"""
-    name = 'fusioncam_report_{:%Y%m%d_%H%M%S}.txt'.format(datetime.datetime.now())
-    path = os.path.join(tempfile.gettempdir(), name)
     with open(path, 'w', encoding='utf-8-sig') as f:
         f.write(text)
     return path
+
+
+def write_report(text):
+    """報告テキストを %TEMP% に書き、絶対パスを返す。"""
+    name = 'fusioncam_report_{:%Y%m%d_%H%M%S}.txt'.format(datetime.datetime.now())
+    path = os.path.join(tempfile.gettempdir(), name)
+    return _write_to(path, text)
+
+
+def rewrite_report(path, text):
+    """既存のレポートを同じパスへ書き直す（f3d のパスを本文へ足すときに使う）。"""
+    return _write_to(path, text)
+
+
+def export_f3d(report_path):
+    """アクティブなデザインを、レポート .txt と同じ場所・同じ stem の .f3d に書き出す。
+    成功なら絶対パス、失敗・デザイン無しなら None。
+    ❗ 例外を外に投げない（f3d が出せなくても報告経路は生かす）。"""
+    try:
+        design = fusion_utils.active_design()
+        if design is None:
+            return None
+        # ドキュメント名は日本語・記号でファイル名が壊れうるので使わない
+        # （ドキュメント名はレポート本文に入っている）
+        path = os.path.splitext(report_path)[0] + '.f3d'
+        options = design.exportManager.createFusionArchiveExportOptions(path)
+        if not design.exportManager.execute(options) or not os.path.isfile(path):
+            fusion_utils.log('f3d の書き出しに失敗しました: ' + path)
+            return None
+        return path
+    except Exception:
+        fusion_utils.log('f3d の書き出しに失敗:\n' + traceback.format_exc())
+        return None
+
+
+def reveal_in_explorer(path):
+    """エクスプローラーでファイルを選択状態にして開く（チャットへドラッグしやすくするため）。
+    ❗ os.startfile は .f3d を Fusion で開いてしまうので使わない。
+    ❗ explorer は '/select,' とパスを空白なしで繋ぐ必要がある（間に空白が入ると選択が効かない）。
+    ユーザー名に空白があるとパスにも空白が入るため引用符で囲む。"""
+    try:
+        subprocess.Popen('explorer /select,"{}"'.format(path))
+    except Exception:
+        fusion_utils.log('エクスプローラーで表示できませんでした: ' + str(path))
+
+
+def f3d_message(f3d_path):
+    """完了メッセージへ付け足す f3d の案内。出せなかった場合は '' を返す
+    （余計な不安を与えないため何も足さない）。"""
+    if not f3d_path:
+        return ''
+    return ('\n\n対象 f3d を書き出しました。この f3d も' + REPORT_HINT
+            + 'に送ってください:\n' + f3d_path)
 
 
 def open_report(path):
@@ -217,14 +274,24 @@ def show_error_report(command_name):
         path = write_report(text)
         fusion_utils.log('不具合レポート: ' + path)
 
+        # 対象デザインを .txt と対になる .f3d へ書き出し、本文にも場所を載せる
+        f3d_path = export_f3d(path)
+        if f3d_path:
+            text = build_report(command_name, exc_text=exc_text, f3d_path=f3d_path)
+            rewrite_report(path, text)
+            fusion_utils.log('対象 f3d: ' + f3d_path)
+
         if not can_submit():
             # 送信先が未設定・設定が壊れている場合は従来のファイル方式
             open_report(path)
             fusion_utils.ui().messageBox(
                 'エラーが発生しました。不具合レポートを作成しました。\n'
                 '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n'
-                '可能なら対象の f3d も共有してください。\n\n' + path,
+                '可能なら対象の f3d も共有してください。\n\n' + path
+                + f3d_message(f3d_path),
                 'Fusion CAM Assistant')
+            if f3d_path:
+                reveal_in_explorer(f3d_path)
             return
 
         result = fusion_utils.ui().messageBox(
@@ -235,19 +302,25 @@ def show_error_report(command_name):
             adsk.core.MessageBoxButtonTypes.YesNoButtonType,
             adsk.core.MessageBoxIconTypes.QuestionIconType)
         if result != adsk.core.DialogResults.DialogYes:
-            # 利用者が拒否したのでファイルも開かない（パスはログに残す）
+            # 利用者が拒否したのでファイルも開かない（パスはログに残すだけ）
             fusion_utils.log('レポート送信は見送られました: ' + path)
+            if f3d_path:
+                fusion_utils.log('対象 f3d（未送信）: ' + f3d_path)
             return
 
         if submit_or_open(text, path, command_name):
             fusion_utils.ui().messageBox(
-                '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path,
+                '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
+                + f3d_message(f3d_path),
                 'Fusion CAM Assistant')
         else:
             fusion_utils.ui().messageBox(
                 '送信に失敗しました（オフラインの可能性）。\n'
-                '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path,
+                '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path
+                + f3d_message(f3d_path),
                 'Fusion CAM Assistant')
+        if f3d_path:
+            reveal_in_explorer(f3d_path)
     except Exception:
         try:
             fusion_utils.ui().messageBox('エラー:\n' + traceback.format_exc())
