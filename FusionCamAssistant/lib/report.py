@@ -11,6 +11,7 @@ import tempfile
 import traceback
 import urllib.parse
 import urllib.request
+import zipfile
 
 import adsk.core
 
@@ -25,6 +26,11 @@ REPORT_HINT = '開発者'
 MAX_SUBMIT_CHARS = 40000
 
 _TRUNCATE_MARK = '...(先頭を省略)...\n'
+
+# zip へ同梱するログの上限。ログは追記のみでローテーションが無く肥大しうる。
+MAX_LOG_BYTES = 5 * 1024 * 1024
+
+_LOG_TRUNCATE_MARK = '...(古い部分を省略)...\n'
 
 
 def _log_tail(max_lines=80):
@@ -100,7 +106,7 @@ def build_report(command_name, symptom=None, exc_text=None, f3d_path=None):
     if f3d_path:
         parts.append('')
         parts.append('--- 対象 f3d ---')
-        parts.append(f3d_path + '（このファイルを別途送ってもらってください）')
+        parts.append(f3d_path + '（レポートの zip に design.f3d として同梱）')
 
     if exc_text:
         parts.append('')
@@ -166,13 +172,72 @@ def reveal_in_explorer(path):
         fusion_utils.log('エクスプローラーで表示できませんでした: ' + str(path))
 
 
-def f3d_message(f3d_path):
-    """完了メッセージへ付け足す f3d の案内。出せなかった場合は '' を返す
-    （余計な不安を与えないため何も足さない）。"""
-    if not f3d_path:
+def _log_for_bundle():
+    """zip へ同梱するログ全文を返す。上限を超える分は末尾（新しい側）だけ残す。
+    読めなければ ''。❗ 例外を外に投げない。"""
+    try:
+        if not os.path.isfile(fusion_utils.LOG_FILE):
+            return ''
+        size = os.path.getsize(fusion_utils.LOG_FILE)
+        with open(fusion_utils.LOG_FILE, 'rb') as f:
+            if size > MAX_LOG_BYTES:
+                f.seek(size - MAX_LOG_BYTES)
+                # 切り口が文字の途中に入りうるので errors='replace' で読む
+                return _LOG_TRUNCATE_MARK + f.read().decode('utf-8', 'replace')
+            return f.read().decode('utf-8', 'replace')
+    except Exception:
+        fusion_utils.log('ログの読み込みに失敗:\n' + traceback.format_exc())
         return ''
-    return ('\n\n対象 f3d を書き出しました。この f3d も' + REPORT_HINT
-            + 'に送ってください:\n' + f3d_path)
+
+
+def build_bundle(report_path, text, f3d_path=None):
+    """レポート本文・ログ全文・f3d を1つの zip にまとめ、そのパスを返す。
+    zip は report_path と同じフォルダ・同じ stem の .zip。失敗なら None。
+    ❗ 例外を外に投げない（zip が作れなくても報告経路は生かす）。"""
+    zip_path = os.path.splitext(report_path)[0] + '.zip'
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
+            # 取り出してメモ帳で開いても化けないよう BOM 付きで格納する
+            archive.writestr('report.txt', (text or '').encode('utf-8-sig'))
+            log_text = _log_for_bundle()
+            if log_text:
+                archive.writestr('fusioncam.log', log_text.encode('utf-8-sig'))
+            if f3d_path and os.path.isfile(f3d_path):
+                archive.write(f3d_path, 'design.f3d')
+        return zip_path
+    except Exception:
+        fusion_utils.log('zip の作成に失敗:\n' + traceback.format_exc())
+        return None
+
+
+def cleanup_f3d(f3d_path):
+    """zip 化に成功したあと、ばらの .f3d を消す
+    （送るものを zip 1個に絞り、どれを送るか迷わせないため）。"""
+    if not f3d_path:
+        return
+    try:
+        os.remove(f3d_path)
+    except Exception:
+        fusion_utils.log('f3d を削除できませんでした: ' + str(f3d_path))
+
+
+def finalize_report(report_path, text, f3d_path=None):
+    """レポートの後処理（zip 化 → ばらの f3d 削除）。手動・自動で共用する。
+    戻り値は zip のパス。作れなければ None。❗ 例外を外に投げない。"""
+    bundle_path = build_bundle(report_path, text, f3d_path)
+    if bundle_path:
+        fusion_utils.log('レポート zip: ' + bundle_path)
+        cleanup_f3d(f3d_path)
+    return bundle_path
+
+
+def bundle_message(bundle_path):
+    """完了メッセージへ付け足す zip の案内。作れなかった場合は '' を返す
+    （余計な不安を与えないため何も足さない）。"""
+    if not bundle_path:
+        return ''
+    return ('\n\nレポート・ログ・f3d をまとめた zip を作成しました。これを' + REPORT_HINT
+            + 'に送ってください:\n' + bundle_path)
 
 
 def open_report(path):
@@ -264,6 +329,19 @@ def submit_or_open(report_text, path, command_name, symptom='', reporter=''):
     return False
 
 
+def _attach_design(command_name, exc_text, path, text):
+    """自動報告用：f3d を書き出して本文へ場所を足し、zip にまとめる。
+    戻り値は (最終テキスト, zip パス or None, f3d パス or None)。
+    ❗ 例外を外に投げない（書き出しに失敗しても報告は完走させる）。"""
+    f3d_path = export_f3d(path)
+    if f3d_path:
+        text = build_report(command_name, exc_text=exc_text, f3d_path=f3d_path)
+        rewrite_report(path, text)
+        fusion_utils.log('対象 f3d: ' + f3d_path)
+    bundle_path = finalize_report(path, text, f3d_path)
+    return text, bundle_path, f3d_path
+
+
 def show_error_report(command_name):
     """例外の except 節から呼ぶ。環境＋traceback＋ログの報告を作って開く。
     ❗ この関数自体は絶対に例外を投げない（最後の手段の messageBox まで try で囲む）。"""
@@ -274,26 +352,22 @@ def show_error_report(command_name):
         path = write_report(text)
         fusion_utils.log('不具合レポート: ' + path)
 
-        # 対象デザインを .txt と対になる .f3d へ書き出し、本文にも場所を載せる
-        f3d_path = export_f3d(path)
-        if f3d_path:
-            text = build_report(command_name, exc_text=exc_text, f3d_path=f3d_path)
-            rewrite_report(path, text)
-            fusion_utils.log('対象 f3d: ' + f3d_path)
-
         if not can_submit():
             # 送信先が未設定・設定が壊れている場合は従来のファイル方式
+            text, bundle_path, f3d_path = _attach_design(command_name, exc_text, path, text)
             open_report(path)
             fusion_utils.ui().messageBox(
                 'エラーが発生しました。不具合レポートを作成しました。\n'
-                '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n'
-                '可能なら対象の f3d も共有してください。\n\n' + path
-                + f3d_message(f3d_path),
+                '開いたテキストの内容を' + REPORT_HINT + 'に送って報告してください。\n\n' + path
+                + bundle_message(bundle_path),
                 'Fusion CAM Assistant')
-            if f3d_path:
-                reveal_in_explorer(f3d_path)
+            reveal_path = bundle_path or f3d_path
+            if reveal_path:
+                reveal_in_explorer(reveal_path)
             return
 
+        # ❗ f3d 書き出しと zip は重く、大きなデザインだと数十秒かかる。
+        # エラー直後に無反応になるとフリーズに見えるので、同意を取ってから行う。
         result = fusion_utils.ui().messageBox(
             'エラーが発生しました。\n不具合レポートを開発者に送信しますか？\n\n'
             '送信内容：アドイン version・Fusion バージョン・ドキュメント名・'
@@ -302,25 +376,26 @@ def show_error_report(command_name):
             adsk.core.MessageBoxButtonTypes.YesNoButtonType,
             adsk.core.MessageBoxIconTypes.QuestionIconType)
         if result != adsk.core.DialogResults.DialogYes:
-            # 利用者が拒否したのでファイルも開かない（パスはログに残すだけ）
+            # 拒否されたので f3d 書き出しも zip も行わない（パスはログに残すだけ）
             fusion_utils.log('レポート送信は見送られました: ' + path)
-            if f3d_path:
-                fusion_utils.log('対象 f3d（未送信）: ' + f3d_path)
             return
+
+        text, bundle_path, f3d_path = _attach_design(command_name, exc_text, path, text)
+        reveal_path = bundle_path or f3d_path
 
         if submit_or_open(text, path, command_name):
             fusion_utils.ui().messageBox(
                 '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
-                + f3d_message(f3d_path),
+                + bundle_message(bundle_path),
                 'Fusion CAM Assistant')
         else:
             fusion_utils.ui().messageBox(
                 '送信に失敗しました（オフラインの可能性）。\n'
                 '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path
-                + f3d_message(f3d_path),
+                + bundle_message(bundle_path),
                 'Fusion CAM Assistant')
-        if f3d_path:
-            reveal_in_explorer(f3d_path)
+        if reveal_path:
+            reveal_in_explorer(reveal_path)
     except Exception:
         try:
             fusion_utils.ui().messageBox('エラー:\n' + traceback.format_exc())

@@ -46,12 +46,12 @@ def _on_created(args):
 
     # 大きなデザインで書き出しに時間がかかる場合に外せるようにする
     inputs.addBoolValueInput(
-        'fcaReportExportF3d', 'f3d も書き出す（推奨）', True, '', True)
+        'fcaReportExportF3d', 'f3d も同梱する（推奨）', True, '', True)
 
     note = inputs.addTextBoxCommandInput(
         'fcaReportNote', '',
-        '自動で送れるのはテキストのみです。f3d は書き出したファイルを'
-        'エクスプローラーで表示するので、それを添えて送ってください。',
+        '自動で送れるのはテキストのみです。レポート・ログ全文・f3d をまとめた zip を'
+        'エクスプローラーで表示するので、それを手動で添えて送ってください。',
         2, True)
     note.isFullWidth = True
 
@@ -84,31 +84,34 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
                 report.rewrite_report(path, text)
                 fusion_utils.log('対象 f3d: ' + f3d_path)
 
+            # レポート本文・ログ全文・f3d を1つの zip にまとめる（送るものを1個に絞る）
+            bundle_path = report.finalize_report(path, text, f3d_path)
+            reveal_path = bundle_path or (f3d_path if f3d_path else None)
+
             if not report.can_submit():
                 report.open_report(path)
                 ui.messageBox(
                     '報告テキストを作成しました。\n'
-                    'この内容を' + report.REPORT_HINT + 'に送ってください。\n'
-                    '可能なら対象 f3d も共有してください。\n\n' + path
-                    + report.f3d_message(f3d_path),
+                    'この内容を' + report.REPORT_HINT + 'に送ってください。\n\n' + path
+                    + report.bundle_message(bundle_path),
                     'Fusion CAM Assistant')
-                if f3d_path:
-                    report.reveal_in_explorer(f3d_path)
+                if reveal_path:
+                    report.reveal_in_explorer(reveal_path)
                 return
 
             if report.submit_or_open(text, path, '（手動報告）',
                                      symptom=symptom, reporter=reporter):
                 ui.messageBox(
                     '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
-                    + report.f3d_message(f3d_path),
+                    + report.bundle_message(bundle_path),
                     'Fusion CAM Assistant')
             else:
                 ui.messageBox(
                     '送信に失敗しました（オフラインの可能性）。\n'
                     '開いたテキストの内容を' + report.REPORT_HINT + 'に送ってください。\n\n' + path
-                    + report.f3d_message(f3d_path),
+                    + report.bundle_message(bundle_path),
                     'Fusion CAM Assistant')
-            if f3d_path:
-                report.reveal_in_explorer(f3d_path)
+            if reveal_path:
+                report.reveal_in_explorer(reveal_path)
         except Exception:
             report.show_error_report('問題を報告')
