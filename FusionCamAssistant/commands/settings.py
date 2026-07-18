@@ -3,11 +3,9 @@
 #
 # 所有していない工具のテンプレは自動割当・ダイアログの選択肢から除外される。
 
-import traceback
-
 import adsk.core
 
-from ..lib import fusion_utils, template_registry
+from ..lib import fusion_utils, report, template_registry
 
 COMMAND_ID = 'fcaSettings'
 _panel = None
@@ -49,7 +47,7 @@ def _on_created(args):
         config = fusion_utils.load_config()
         registry = template_registry.Registry(config['template_dir'], config)
     except Exception:
-        ui.messageBox('設定の読み込みに失敗:\n{}'.format(traceback.format_exc()))
+        report.show_error_report('設定の読み込み')
         return
 
     inputs = command.commandInputs
@@ -95,4 +93,4 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             })
             fusion_utils.log(f'設定を保存: 優先={preferred} 所有工具={len(owned)}件')
         except Exception:
-            ui.messageBox('設定の保存に失敗:\n{}'.format(traceback.format_exc()))
+            report.show_error_report('設定の保存')

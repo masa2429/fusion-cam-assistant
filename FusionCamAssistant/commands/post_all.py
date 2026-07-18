@@ -14,7 +14,7 @@ import traceback
 import adsk.cam
 import adsk.core
 
-from ..lib import cam_builder, fusion_utils
+from ..lib import cam_builder, fusion_utils, report
 
 _NC_NAME_RE = re.compile(r'^\d+_flat')
 
@@ -295,7 +295,7 @@ def _on_created(args):
             message += '\n\n⚠ ポストに失敗（ログ参照）:\n  ' + '\n  '.join(failed_names)
         ui.messageBox(message)
     except Exception:
-        ui.messageBox('NC出力に失敗:\n{}'.format(traceback.format_exc()))
+        report.show_error_report('NC一括出力')
 
 
 def _set_nc_parameter(nc_input, name, value):

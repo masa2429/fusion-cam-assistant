@@ -19,7 +19,7 @@ import adsk
 import adsk.core
 import adsk.fusion
 
-from ..lib import fusion_utils
+from ..lib import fusion_utils, report
 from . import layout_check
 
 COMMAND_ID = 'fcaAutoPlace'
@@ -364,7 +364,7 @@ def _on_created(args):
         command.okButtonText = '配置'
         command.execute.add(fusion_utils.keep(_ExecuteHandler()))
     except Exception:
-        ui.messageBox('自動配置に失敗:\n{}'.format(traceback.format_exc()))
+        report.show_error_report('自動配置')
 
 
 def _selected_key(inputs, input_id, options, default_key):
@@ -399,7 +399,7 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             _run_placement(ui, width_mm, depth_mm, gap_mm, edge_mm,
                            solver_mode, rotation_key, goto_cam)
         except Exception:
-            ui.messageBox('自動配置に失敗:\n{}'.format(traceback.format_exc()))
+            report.show_error_report('自動配置')
 
 
 def _run_placement(ui, width_mm, depth_mm, gap_mm, edge_mm,

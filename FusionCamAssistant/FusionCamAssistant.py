@@ -1,12 +1,10 @@
 # Fusion CAM Assistant エントリポイント
 # 製造ワークスペースに「CAM アシスタント」パネルを作り、各コマンドを登録する。
 
-import traceback
-
 import adsk.core
 
-from .commands import about, auto_cam, auto_place, layout_check, post_all, settings
-from .lib import fusion_utils, update_check
+from .commands import about, auto_cam, auto_place, layout_check, post_all, report_issue, settings
+from .lib import fusion_utils, report, update_check
 
 WORKSPACE_ID = 'CAMEnvironment'  # 製造ワークスペース
 PANEL_ID = 'FusionCamPanel'
@@ -14,9 +12,9 @@ PANEL_NAME = 'CAM アシスタント'
 # 配置作業はデザイン側で行うため、配置系コマンドはデザインワークスペースにも出す
 DESIGN_WORKSPACE_ID = 'FusionSolidEnvironment'
 DESIGN_PANEL_ID = 'FusionCamDesignPanel'
-DESIGN_COMMAND_IDS = (auto_place.COMMAND_ID, layout_check.COMMAND_ID)
+DESIGN_COMMAND_IDS = (auto_place.COMMAND_ID, layout_check.COMMAND_ID, report_issue.COMMAND_ID)
 
-COMMAND_MODULES = [auto_cam, post_all, auto_place, layout_check, settings, about]
+COMMAND_MODULES = [auto_cam, post_all, auto_place, layout_check, settings, about, report_issue]
 
 
 def run(context):
@@ -54,7 +52,7 @@ def run(context):
             pass  # 更新チェックは起動を妨げない
     except Exception:
         if ui:
-            ui.messageBox('Fusion CAM Assistant の起動に失敗:\n{}'.format(traceback.format_exc()))
+            report.show_error_report('アドイン起動')
 
 
 def stop(context):
@@ -80,4 +78,4 @@ def stop(context):
         fusion_utils.clear_handlers()
     except Exception:
         if ui:
-            ui.messageBox('Fusion CAM Assistant の停止に失敗:\n{}'.format(traceback.format_exc()))
+            report.show_error_report('アドイン停止')

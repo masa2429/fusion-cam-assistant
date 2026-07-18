@@ -3,12 +3,10 @@
 # ダイアログは分類結果を1行=1操作で一覧表示し、チェックボックスで適用の有無、
 # ドロップダウンで同種別の別テンプレート（工具径違い）への変更ができる。
 
-import traceback
-
 import adsk.cam
 import adsk.core
 
-from ..lib import cam_builder, classifier, fusion_utils, template_registry
+from ..lib import cam_builder, classifier, fusion_utils, report, template_registry
 
 COMMAND_ID = 'fcaAutoCam'
 _panel = None
@@ -109,7 +107,7 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
                         item.template = selected
 
             cam = fusion_utils.active_cam()
-            report = cam_builder.build(cam, result, result.items, _state['config'])
-            ui.messageBox(report.summary(), 'Fusion CAM Assistant')
+            cam_report = cam_builder.build(cam, result, result.items, _state['config'])
+            ui.messageBox(cam_report.summary(), 'Fusion CAM Assistant')
         except Exception:
-            ui.messageBox('生成に失敗:\n{}'.format(traceback.format_exc()))
+            report.show_error_report('自動CAM生成')

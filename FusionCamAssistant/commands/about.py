@@ -2,12 +2,11 @@
 # メンバーから「動かない」と相談されたときの切り分けに使う。
 
 import os
-import traceback
 
 import adsk.cam
 import adsk.core
 
-from ..lib import fusion_utils, template_registry, update_check
+from ..lib import fusion_utils, report, template_registry, update_check
 
 COMMAND_ID = 'fcaAbout'
 _panel = None
@@ -77,4 +76,4 @@ def _on_created(args):
         lines.append(f'リポジトリ: {update_check.REPO_URL}')
         ui.messageBox('\n'.join(lines), 'Fusion CAM Assistant 診断')
     except Exception:
-        ui.messageBox('診断に失敗:\n{}'.format(traceback.format_exc()))
+        report.show_error_report('バージョン情報')

@@ -6,12 +6,11 @@
 
 import itertools
 import math
-import traceback
 
 import adsk.core
 import adsk.fusion
 
-from ..lib import classifier, fusion_utils
+from ..lib import classifier, fusion_utils, report
 
 COMMAND_ID = 'fcaLayoutCheck'
 FRAME_SKETCH_NAME = '配置枠 280x280'
@@ -137,4 +136,4 @@ def _on_created(args):
         else:
             ui.messageBox('\n'.join(lines), '配置チェック')
     except Exception:
-        ui.messageBox('配置チェックに失敗:\n{}'.format(traceback.format_exc()))
+        report.show_error_report('配置チェック')

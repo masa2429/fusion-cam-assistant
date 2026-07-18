@@ -147,7 +147,12 @@ class _CreatedHandler(adsk.core.CommandCreatedEventHandler):
         try:
             self._callback(args)
         except Exception:
-            ui().messageBox('コマンド作成に失敗:\n{}'.format(traceback.format_exc()))
+            # report は fusion_utils を import するので循環回避のため遅延 import する
+            try:
+                from . import report
+                report.show_error_report('コマンド作成')
+            except Exception:
+                ui().messageBox('コマンド作成に失敗:\n{}'.format(traceback.format_exc()))
 
 
 RESOURCES_DIR = os.path.join(ADDIN_DIR, 'resources')
