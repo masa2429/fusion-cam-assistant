@@ -32,5 +32,9 @@
             "version": "entry.985532502",
             "report": "entry.190589015"
         }
+    },
+    "report_upload": {
+        "url": "https://script.google.com/macros/s/AKfycbz2D6u-F-RUN10T35EazV4SHivulUH09WtsEjTbPFfDhMOkOIHBZ4BRsGmjJPaOU1kh4g/exec",
+        "max_mb": 30
     }
 }

@@ -29,6 +29,7 @@ def _on_created(args):
     inputs = command.commandInputs
 
     can_submit = report.can_submit()
+    can_upload = report.can_upload()
 
     inputs.addStringValueInput('fcaReportReporter', '報告者名（任意）', '')
 
@@ -37,22 +38,28 @@ def _on_created(args):
 
     if can_submit:
         # 何が送られるかを押す前に把握できるようにする
+        if can_upload:
+            privacy_text = ('送信内容：報告者名・症状・環境情報・ログ全文・'
+                            '対象デザイン（f3d を含む zip、チェック時）。'
+                            '送信前にローカルにも保存されます。')
+        else:
+            privacy_text = ('送信内容：報告者名・症状・アドイン version・Fusion バージョン・'
+                            'ドキュメント名・直近のログ。送信前にローカルにも保存されます。')
         privacy = inputs.addTextBoxCommandInput(
-            'fcaReportPrivacy', '',
-            '送信内容：報告者名・症状・アドイン version・Fusion バージョン・'
-            'ドキュメント名・直近のログ。送信前にローカルにも保存されます。',
-            3, True)
+            'fcaReportPrivacy', '', privacy_text, 3, True)
         privacy.isFullWidth = True
 
     # 大きなデザインで書き出しに時間がかかる場合に外せるようにする
     inputs.addBoolValueInput(
         'fcaReportExportF3d', 'f3d も同梱する（推奨）', True, '', True)
 
-    note = inputs.addTextBoxCommandInput(
-        'fcaReportNote', '',
-        '自動で送れるのはテキストのみです。レポート・ログ全文・f3d をまとめた zip を'
-        'エクスプローラーで表示するので、それを手動で添えて送ってください。',
-        2, True)
+    if can_upload:
+        note_text = ('zip も自動で送信します。失敗した場合はエクスプローラーで表示するので、'
+                     '手動で開発者に送ってください。')
+    else:
+        note_text = ('自動で送れるのはテキストのみです。レポート・ログ全文・f3d をまとめた zip を'
+                     'エクスプローラーで表示するので、それを手動で添えて送ってください。')
+    note = inputs.addTextBoxCommandInput('fcaReportNote', '', note_text, 2, True)
     note.isFullWidth = True
 
     command.okButtonText = '送信' if can_submit else '報告テキストを作成'
@@ -99,19 +106,8 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
                     report.reveal_in_explorer(reveal_path)
                 return
 
-            if report.submit_or_open(text, path, '（手動報告）',
-                                     symptom=symptom, reporter=reporter):
-                ui.messageBox(
-                    '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
-                    + report.bundle_message(bundle_path),
-                    'Fusion CAM Assistant')
-            else:
-                ui.messageBox(
-                    '送信に失敗しました（オフラインの可能性）。\n'
-                    '開いたテキストの内容を' + report.REPORT_HINT + 'に送ってください。\n\n' + path
-                    + report.bundle_message(bundle_path),
-                    'Fusion CAM Assistant')
-            if reveal_path:
-                report.reveal_in_explorer(reveal_path)
+            # フォーム送信と zip 自動アップロードを両方試み、結果でメッセージ・reveal を出し分ける
+            report.deliver_report(text, path, bundle_path, reveal_path,
+                                  '（手動報告）', symptom=symptom, reporter=reporter)
         except Exception:
             report.show_error_report('問題を報告')

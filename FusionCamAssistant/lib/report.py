@@ -4,7 +4,9 @@
 # 自動トリガー（例外時の show_error_report）と手動トリガー（「問題を報告」コマンド）の
 # 両方から使う。報告経路は必ずオフラインで速いこと（newer_remote_version は呼ばない）。
 
+import base64
 import datetime
+import json
 import os
 import subprocess
 import tempfile
@@ -273,6 +275,70 @@ def can_submit():
     return _form_config() is not None
 
 
+def _upload_config():
+    """config.json の report_upload を返す。未設定・不正・読み込み失敗なら None。
+    ❗ 例外を投げない（自動送信が使えなくても手動送付へ退避できるようにするため）。"""
+    try:
+        config = fusion_utils.load_config()
+    except Exception:
+        return None
+    try:
+        upload = config.get('report_upload')
+        if not isinstance(upload, dict):
+            return None
+        url = upload.get('url')
+        if not isinstance(url, str) or not url:
+            return None
+        # max_mb は int に矯正（不正・未設定なら既定 30）
+        try:
+            max_mb = int(upload.get('max_mb', 30))
+        except (TypeError, ValueError):
+            max_mb = 30
+        return {'url': url, 'max_mb': max_mb}
+    except Exception:
+        return None
+
+
+def can_upload():
+    """zip の自動アップロードが使えるか。False なら zip は手動送付のまま。"""
+    return _upload_config() is not None
+
+
+def upload_bundle(bundle_path, timeout_seconds=30):
+    """zip を base64 で GAS の Web アプリへ POST し、Drive に保存させる。成功なら True。
+    ❗ 例外を外に投げない（失敗はログに残して False。手動送付へフォールバックする）。"""
+    upload = _upload_config()
+    if upload is None or not bundle_path or not os.path.isfile(bundle_path):
+        return False
+    try:
+        # base64 で 4/3 に膨れるため、生サイズを max_mb で抑えて GAS の 50MB 上限に収める
+        size = os.path.getsize(bundle_path)
+        if size > upload['max_mb'] * 1024 * 1024:
+            fusion_utils.log('zip が大きすぎるため自動送信しない: {:.1f}MB'.format(
+                size / (1024 * 1024)))
+            return False
+
+        with open(bundle_path, 'rb') as f:
+            encoded = base64.b64encode(f.read()).decode('ascii')
+
+        data = urllib.parse.urlencode({
+            'name': os.path.basename(bundle_path),
+            'data': encoded,
+        }).encode('utf-8')
+        request = urllib.request.Request(
+            upload['url'], data=data, headers={'User-Agent': 'FusionCamAssistant'})
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode('utf-8', 'replace')
+        result = json.loads(body)
+        if isinstance(result, dict) and result.get('ok') is True:
+            return True
+        fusion_utils.log('zip の自動送信に失敗: ' + body)
+        return False
+    except Exception:
+        fusion_utils.log('zip の自動送信に失敗: ' + traceback.format_exc())
+        return False
+
+
 def _truncate_for_submit(text):
     """上限を超えたら末尾を残して先頭を切り詰める。"""
     text = text or ''
@@ -329,6 +395,53 @@ def submit_or_open(report_text, path, command_name, symptom='', reporter=''):
     return False
 
 
+def deliver_report(text, path, bundle_path, reveal_path,
+                   command_name, symptom='', reporter=''):
+    """フォーム送信と zip 自動アップロードを両方試み、結果でメッセージと reveal を出し分ける。
+    片方が失敗してももう片方を打ち切らない。手動・自動の送信フローで共用する。
+    ❗ 例外を投げない前提（呼び出し元が try で囲む）。"""
+    ui = fusion_utils.ui()
+    # フォーム送信（失敗時は submit_or_open が .txt を開く）
+    submitted = submit_or_open(text, path, command_name, symptom=symptom, reporter=reporter)
+    # zip が作れていて自動送信が使えるときだけアップロードを試す
+    attempt_upload = bool(bundle_path) and can_upload()
+    uploaded = upload_bundle(bundle_path) if attempt_upload else False
+
+    if not submitted:
+        # フォーム送信に失敗 → 従来どおり手動送付へフォールバック（zip の成否は問わない）
+        ui.messageBox(
+            '送信に失敗しました（オフラインの可能性）。\n'
+            '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path
+            + bundle_message(bundle_path), 'Fusion CAM Assistant')
+        if reveal_path:
+            reveal_in_explorer(reveal_path)
+        return
+
+    if attempt_upload and uploaded:
+        # レポートも zip も自動で送れた → 手動送付が不要なので reveal しない
+        ui.messageBox(
+            '送信しました（レポートと zip）。ご協力ありがとうございます。\n\nローカル保存先: '
+            + path, 'Fusion CAM Assistant')
+        return
+
+    if attempt_upload:
+        # zip の自動送信だけ失敗 → 表示した zip を手動で送ってもらう
+        ui.messageBox(
+            'レポートは送信しましたが、zip の自動送信に失敗しました。\n'
+            '表示した zip を' + REPORT_HINT + 'に送ってください。\n\nローカル保存先: '
+            + path + bundle_message(bundle_path), 'Fusion CAM Assistant')
+        if reveal_path:
+            reveal_in_explorer(reveal_path)
+        return
+
+    # zip が作れなかった or 自動送信が使えない → 従来の成功メッセージ（手動送付案内つき）
+    ui.messageBox(
+        '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
+        + bundle_message(bundle_path), 'Fusion CAM Assistant')
+    if reveal_path:
+        reveal_in_explorer(reveal_path)
+
+
 def _attach_design(command_name, exc_text, path, text):
     """自動報告用：f3d を書き出して本文へ場所を足し、zip にまとめる。
     戻り値は (最終テキスト, zip パス or None, f3d パス or None)。
@@ -368,10 +481,16 @@ def show_error_report(command_name):
 
         # ❗ f3d 書き出しと zip は重く、大きなデザインだと数十秒かかる。
         # エラー直後に無反応になるとフリーズに見えるので、同意を取ってから行う。
+        # zip を自動送信するときは同意文で送信内容（f3d を含む zip）を明示する。
+        if can_upload():
+            privacy = ('送信内容：アドイン version・Fusion バージョン・ドキュメント名・'
+                       'エラー内容・ログ全文・対象デザイン（f3d を含む zip）')
+        else:
+            privacy = ('送信内容：アドイン version・Fusion バージョン・ドキュメント名・'
+                       'エラー内容・直近のログ')
         result = fusion_utils.ui().messageBox(
             'エラーが発生しました。\n不具合レポートを開発者に送信しますか？\n\n'
-            '送信内容：アドイン version・Fusion バージョン・ドキュメント名・'
-            'エラー内容・直近のログ\n\n保存先: ' + path,
+            + privacy + '\n\n保存先: ' + path,
             'Fusion CAM Assistant',
             adsk.core.MessageBoxButtonTypes.YesNoButtonType,
             adsk.core.MessageBoxIconTypes.QuestionIconType)
@@ -382,20 +501,7 @@ def show_error_report(command_name):
 
         text, bundle_path, f3d_path = _attach_design(command_name, exc_text, path, text)
         reveal_path = bundle_path or f3d_path
-
-        if submit_or_open(text, path, command_name):
-            fusion_utils.ui().messageBox(
-                '送信しました。ご協力ありがとうございます。\n\nローカル保存先: ' + path
-                + bundle_message(bundle_path),
-                'Fusion CAM Assistant')
-        else:
-            fusion_utils.ui().messageBox(
-                '送信に失敗しました（オフラインの可能性）。\n'
-                '開いたテキストの内容を' + REPORT_HINT + 'に送ってください。\n\n' + path
-                + bundle_message(bundle_path),
-                'Fusion CAM Assistant')
-        if reveal_path:
-            reveal_in_explorer(reveal_path)
+        deliver_report(text, path, bundle_path, reveal_path, command_name)
     except Exception:
         try:
             fusion_utils.ui().messageBox('エラー:\n' + traceback.format_exc())
