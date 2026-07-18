@@ -36,6 +36,19 @@ def ui():
 
 LOG_FILE = os.path.join(tempfile.gettempdir(), 'fusioncam.log')
 
+# このサイズを超えたら世代交代（.1 へ）する。追記のみだと際限なく肥大するため。
+LOG_ROTATE_BYTES = 2 * 1024 * 1024
+
+
+def _rotate_log_if_needed():
+    """LOG_FILE が LOG_ROTATE_BYTES を超えていたら .1 へ置き換える（世代交代）。
+    ❗ ここで失敗しても本来の追記処理を妨げないよう例外を握る。"""
+    try:
+        if os.path.getsize(LOG_FILE) > LOG_ROTATE_BYTES:
+            os.replace(LOG_FILE, LOG_FILE + '.1')
+    except OSError:
+        pass
+
 
 def log(message):
     text = '[FusionCam] {}'.format(message)
@@ -44,6 +57,7 @@ def log(message):
     except Exception:
         pass
     try:
+        _rotate_log_if_needed()
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(text + '\n')
     except OSError:

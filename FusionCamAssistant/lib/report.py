@@ -175,18 +175,24 @@ def reveal_in_explorer(path):
 
 
 def _log_for_bundle():
-    """zip へ同梱するログ全文を返す。上限を超える分は末尾（新しい側）だけ残す。
-    読めなければ ''。❗ 例外を外に投げない。"""
+    """zip へ同梱するログ全文を返す。ローテーション済みの .1（あれば）→ 本体の順に連結し、
+    上限を超える分は末尾（新しい側）だけ残す。読めなければ ''。❗ 例外を外に投げない。"""
     try:
-        if not os.path.isfile(fusion_utils.LOG_FILE):
+        data = b''
+        rotated_path = fusion_utils.LOG_FILE + '.1'
+        if os.path.isfile(rotated_path):
+            with open(rotated_path, 'rb') as f:
+                data += f.read()
+        if os.path.isfile(fusion_utils.LOG_FILE):
+            with open(fusion_utils.LOG_FILE, 'rb') as f:
+                data += f.read()
+        if not data:
             return ''
-        size = os.path.getsize(fusion_utils.LOG_FILE)
-        with open(fusion_utils.LOG_FILE, 'rb') as f:
-            if size > MAX_LOG_BYTES:
-                f.seek(size - MAX_LOG_BYTES)
-                # 切り口が文字の途中に入りうるので errors='replace' で読む
-                return _LOG_TRUNCATE_MARK + f.read().decode('utf-8', 'replace')
-            return f.read().decode('utf-8', 'replace')
+        size = len(data)
+        if size > MAX_LOG_BYTES:
+            # 切り口が文字の途中に入りうるので errors='replace' で読む
+            return _LOG_TRUNCATE_MARK + data[size - MAX_LOG_BYTES:].decode('utf-8', 'replace')
+        return data.decode('utf-8', 'replace')
     except Exception:
         fusion_utils.log('ログの読み込みに失敗:\n' + traceback.format_exc())
         return ''
