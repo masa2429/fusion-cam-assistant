@@ -78,7 +78,7 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             want_f3d = export_input.value if export_input is not None else False
 
             # 送信可否に関わらず、まずローカルに必ず残す
-            text = report.build_report('（手動報告）', symptom=symptom)
+            text = report.build_report('（手動報告）', symptom=symptom, reporter=reporter)
             path = report.write_report(text)
             fusion_utils.log('不具合レポート（手動）: ' + path)
 
@@ -86,7 +86,7 @@ class _ExecuteHandler(adsk.core.CommandEventHandler):
             f3d_path = report.export_f3d(path) if want_f3d else None
             if f3d_path:
                 text = report.build_report('（手動報告）', symptom=symptom,
-                                           f3d_path=f3d_path)
+                                           f3d_path=f3d_path, reporter=reporter)
                 report.rewrite_report(path, text)
                 fusion_utils.log('対象 f3d: ' + f3d_path)
 

@@ -95,10 +95,14 @@ def _environment_lines(command_name):
     return lines
 
 
-def build_report(command_name, symptom=None, exc_text=None, f3d_path=None):
-    """報告テキストを組み立てて返す。f3d_path を渡すと書き出した f3d の場所も載せる。"""
+def build_report(command_name, symptom=None, exc_text=None, f3d_path=None, reporter=None):
+    """報告テキストを組み立てて返す。f3d_path を渡すと書き出した f3d の場所も載せる。
+    reporter を渡すと環境情報の直後に報告者名の行を足す（誰の報告か zip だけでも分かるように）。"""
     parts = ['Fusion CAM Assistant 不具合レポート']
     parts.extend(_environment_lines(command_name))
+
+    if reporter:
+        parts.append('報告者名: {}'.format(reporter))
 
     if symptom:
         parts.append('')
